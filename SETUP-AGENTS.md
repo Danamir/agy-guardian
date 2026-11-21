@@ -116,6 +116,13 @@ python scripts/agy_guardian_hook.py --cwd "<project-root>" --check "ssh <allowed
 python scripts/agy_guardian_hook.py --cwd "C:\Users\dev\workspace\unrelated" --check "ssh <allowed-host> 'ls'" --no-audit
 ```
 
+### Ongoing Tuning: Updating Local `policyNotes`
+When the user reports recurring safe commands that still prompt via Layer 3 (`ask`):
+1. Ask the user to share the relevant lines from `%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl` (note: `.gemini/config/` may be read-protected from agent file tools — never bypass protection boundaries; ask the user to paste `tail -n 20 ~/.gemini/config/agy_guardian.log.jsonl` if needed).
+2. Decide with the user whether the rule belongs globally under `"defaults"."policyNotes"` (e.g., trusted forge CLI workflows like `glab issue/label/mr`) or scoped to a single entry under `"projects"[i]."policyNotes"`.
+3. Keep `policyNotes` **short, explicit, and bounded** — state both what is allowed and what must still prompt (e.g., *"glab issue create/list and label list are allowed when requested by the user; deleting issues/repos or force-pushing must still ask."*).
+4. Merge into `%USERPROFILE%\.gemini\config\agy_guardian_policies.json` without clobbering existing entries, then re-verify with `--check --user-input "..." --no-audit` on both a benign case and a risky/destructive variant.
+
 ---
 
 ## Step 5 — Wire `%USERPROFILE%\.gemini\config\hooks.json`
@@ -139,7 +146,32 @@ Get-Content "$env:USERPROFILE\.gemini\config\hooks.json" -Raw | ConvertFrom-Json
 
 ---
 
-## Step 6 — Final Handoff & Hygiene Check
+## Step 6 — Optional Maintenance: `settings.json` Permissions Cleanup
+
+On Windows PowerShell, clicking "Always allow" in `agy` often persists **exact full command strings** whenever a command contains `$vars`, backticks, pipes, `;`, or complex flags. Over time, `%USERPROFILE%\.gemini\antigravity-cli\settings.json` accumulates noisy, one-off verbatim entries.
+
+When the user asks to clean up `settings.json` permissions:
+1. **Pick a scan scope** (default to **Recent** for routine quick passes unless the user asks for a full audit):
+   - **Recent (default for quick passes):** Inspect only the **last `N` entries** (default `N = 10`) of `permissions.allow`, since `agy` appends new "Always allow" grants to the bottom of the list.
+   - **Session-only:** Inspect only entries matching commands executed in the current conversation (fastest right after a session, but misses grants from other terminals or prior `/compact`ed turns).
+   - **Full audit:** Scan the entire `permissions.allow` array (catches older duplicates and overly-broad legacy regexes).
+2. **Read permissions safely:** Check whether `%USERPROFILE%\.gemini\antigravity-cli\settings.json` is readable; if blocked by Antigravity's `.gemini/` protection boundary, ask the user to paste the permissions/allow array from it (never bypass access controls).
+3. **Scan for overly-specific, redundant, or overly-broad entries:** Flag allow rules that contain:
+   - Verbatim arguments, commit messages, issue titles/descriptions, specific file paths, or one-off flags (e.g., `command(glab issue create --title "..." --description "...")`).
+   - Chained/piped verbatim commands (`;`, `&&`, `|`) that only match one historical invocation.
+   - Duplicate/redundant rules (e.g., `ls` already covered by a broader `(Get-ChildItem|gci|dir|ls)` regex, or `read_url(example.com)` already covered by `read_url(*)`).
+   - Overly-broad legacy pre-guardian regexes (e.g., `git .*`, `curl .*`, `iwr .*`, `node .*`, `Get-Content .*`, `Start-Process .*`) that override `agy-guardian`'s `"ask"` decisions on destructive, network, or outside-workspace commands.
+4. **Group by tool/command family & propose tiered wildcard options (increasing liberty):**
+   For each noisy group, present a concise list of choices from strictest to broadest so the user can pick their comfort level, and **mark the best-fit option with `(recommended)`** when applicable:
+   - **Level 1 — Remove (defer to `agy-guardian`):** Drop the verbatim entry completely and let `agy-guardian` Layers 1–3 evaluate it dynamically (usually `(recommended)` for standard dev/read/test commands or overly-broad legacy regexes).
+   - **Level 2 — Narrow subcommand wildcard:** Replace verbose one-offs with a single scoped subcommand prefix (e.g., `glab issue create *`, `glab label list *`, `docker compose logs *`).
+   - **Level 3 — Sub-area wildcard:** Group closely related actions under one subcommand family (e.g., `glab issue *`, `git commit *`). Note any mutating subcommands included (e.g., `glab issue close`).
+   - **Level 4 — Broad tool wildcard (High Liberty):** e.g., `glab *` or `docker *`. **Explicitly warn** about destructive subcommands that would be covered (e.g., `delete`, `rm`, `prune`, `push --force`) and remind the user that only Layer 1 hard-deny will still block catastrophic patterns.
+5. **Apply only approved changes:** Never modify `settings.json` without the user's explicit selection per group, and create a timestamped backup (`settings.json.bak`) before writing (or provide the exact cleaned JSON snippet if the user prefers to apply it manually).
+
+---
+
+## Step 7 — Final Handoff & Hygiene Check
 
 1. Confirm the git repository has no unintended modifications or leaked machine-local data:
    ```powershell
