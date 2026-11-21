@@ -36,11 +36,12 @@ If `.env` already exists, read it first (never print secrets such as `HF_TOKEN`)
 1. **Path to `llama-server`** (leave blank if `llama-server` is already on `PATH`).
 2. **Decision models directory** (`AGY_GUARDIAN_DECISION_MODELS_DIR`) and **model filename** (`AGY_GUARDIAN_MODEL_PATH`, default `${AGY_GUARDIAN_DECISION_MODELS_DIR}/Cloudflare_clef-flash-Q5_K_M.gguf`).
 3. **Host & port** (default `127.0.0.1:8099`).
-4. **Backend mode:**
-   - `systemone` (default — recommended for Decision Models; fails closed immediately to `"ask"` if server is stopped).
-   - `auto` (tries `/v1/systemone`, falls back to `/v1/chat/completions` on the same endpoint only if HTTP `404`/`405`/`501`).
-   - `completion` (generative 1-token GBNF fallback).
-   - Optional `AGY_GUARDIAN_FALLBACK_ENDPOINT` if running a separate fallback server.
+4. **Layer 3 backend mode** (present all 4 options clearly):
+   - **Local `llama-server` (default):** `AGY_GUARDIAN_BACKEND=systemone` (or `auto` / `completion`). Fails closed to `"ask"` when `llama-server` is stopped unless a fallback backend is configured.
+   - **Remote Gemini Decision 1 — Paid Tier (`$0.10 / 1M` input tokens, no training on user data):** `AGY_GUARDIAN_BACKEND=gemini_decision_paid` with `AGY_GUARDIAN_GEMINI_PAID_API_KEY` (strictly isolated — never reads Free Tier or generic `GEMINI_API_KEY`).
+   - **Remote Gemini Decision 1 — Free Tier (explicit opt-in):** `AGY_GUARDIAN_BACKEND=gemini_decision_free` with `AGY_GUARDIAN_GEMINI_FREE_API_KEY` *(warn the user that Free Tier payloads may be used by Google to improve products)*.
+   - **No Layer 3 (deterministic L1 + L2 only):** `AGY_GUARDIAN_ENABLE_LAYER3=false`.
+   - **Optional explicit fallback (`AGY_GUARDIAN_FALLBACK_BACKEND`):** `none` *(default)* | `gemini_decision_paid` | `gemini_decision_free` | `completion` | `systemone` (e.g., local `systemone` primary + `gemini_decision_paid` fallback when `llama-server` is not launched). Legacy `AGY_GUARDIAN_FALLBACK_ENDPOINT` remains supported for `/v1/chat/completions`.
 5. **Audit logging:** Default `%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl` with `AGY_GUARDIAN_AUDIT_FAIL_CLOSED=true` (downgrades `"allow"` → `"ask"` if writing fails; set `AGY_GUARDIAN_AUDIT_LOG=off` only if the user explicitly disables logging).
 
 Write `.env` using native file tools (never echo secrets to the terminal).

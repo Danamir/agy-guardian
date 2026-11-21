@@ -1,4 +1,4 @@
-"""Zero-dependency HTTP classifier clients for llama-server (/v1/systemone and /v1/chat/completions)."""
+"""Zero-dependency HTTP classifier clients for local llama-server and remote Gemini Decision 1."""
 
 from __future__ import annotations
 
@@ -135,12 +135,20 @@ def apply_thresholds(
     return "ask"
 
 
-def _post_json(url: str, payload: dict[str, Any], timeout_sec: float) -> tuple[dict[str, Any], float]:
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout_sec: float,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], float]:
     body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     req = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     t0 = time.perf_counter()
@@ -409,3 +417,171 @@ class CompletionClassifier:
         if total > 0:
             return {k: v / total for k, v in out.items()}
         return {}
+
+
+DEFAULT_GEMINI_DECISION_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/decisions"
+DEFAULT_GEMINI_DECISION_MODEL = "gemini-decision-1"
+DEFAULT_GEMINI_MAX_USER_INPUT_CHARS = 2000
+
+
+def _build_gemini_questions(schema_mode: str) -> dict[str, Any]:
+    """Translate SystemOne questions into the Gemini Decisions API schema."""
+    source = SYSTEMONE_MULTI_QUESTIONS if schema_mode == "multi" else SYSTEMONE_SINGLE_QUESTIONS
+    questions: dict[str, Any] = {}
+    for qid, qdef in source.items():
+        qtype = qdef["type"]
+        instructions = qdef["instructions"]
+        if qtype == "noul":
+            criteria = qdef.get("criteria") or {}
+            c_true = criteria.get("true")
+            c_false = criteria.get("false")
+            if c_true or c_false:
+                parts = [instructions]
+                if c_true:
+                    parts.append(f"Yes if: {c_true}.")
+                if c_false:
+                    parts.append(f"No if: {c_false}.")
+                instructions = " ".join(parts)
+            questions[qid] = {"type": "noul", "instructions": instructions}
+        else:
+            entry: dict[str, Any] = {"type": qtype, "instructions": instructions}
+            if "criteria" in qdef:
+                entry["criteria"] = dict(qdef["criteria"])
+            questions[qid] = entry
+    return questions
+
+
+class GeminiDecisionClassifier:
+    """Zero-dependency HTTP client for Google Gemini Decision 1 (POST /v1beta/decisions)."""
+
+    def __init__(
+        self,
+        api_key: str,
+        endpoint: str = DEFAULT_GEMINI_DECISION_ENDPOINT,
+        model: str = DEFAULT_GEMINI_DECISION_MODEL,
+        schema_mode: str = "multi",
+        timeout_sec: float = 5.0,
+        thresholds: Thresholds | None = None,
+        max_user_input_chars: int = DEFAULT_GEMINI_MAX_USER_INPUT_CHARS,
+    ) -> None:
+        self.api_key = (api_key or "").strip()
+        self.endpoint = (endpoint or DEFAULT_GEMINI_DECISION_ENDPOINT).strip()
+        self.model = (model or DEFAULT_GEMINI_DECISION_MODEL).strip()
+        self.schema_mode = schema_mode
+        self.timeout_sec = timeout_sec
+        self.thresholds = thresholds or Thresholds()
+        self.max_user_input_chars = max_user_input_chars
+
+    def build_payload(self, case: dict[str, Any]) -> dict[str, Any]:
+        last_user_input = str(case.get("lastUserInput", "") or "")
+        if self.max_user_input_chars > 0 and len(last_user_input) > self.max_user_input_chars:
+            last_user_input = last_user_input[: self.max_user_input_chars] + "...[truncated]"
+        state: dict[str, Any] = {
+            "os": "Windows 10 (PowerShell 5.1 / Git Bash)",
+            "workspacePaths": case.get("workspacePaths", []),
+            "cwd": case.get("cwd", ""),
+            "lastUserInput": last_user_input,
+            "commandLine": case.get("commandLine", ""),
+        }
+        project_policy = case.get("projectPolicy")
+        if isinstance(project_policy, dict) and project_policy:
+            state["projectPolicy"] = project_policy
+        return {
+            "model": self.model,
+            "input": json.dumps(state, ensure_ascii=False),
+            "questions": _build_gemini_questions(self.schema_mode),
+        }
+
+    def classify(self, case: dict[str, Any]) -> ClassificationResult:
+        if not self.api_key:
+            return ClassificationResult(decision="ask", error="Missing Gemini API key")
+
+        payload = self.build_payload(case)
+        try:
+            data, latency_ms = _post_json(
+                self.endpoint,
+                payload,
+                self.timeout_sec,
+                extra_headers={"x-goog-api-key": self.api_key},
+            )
+        except urllib.error.HTTPError as exc:
+            return ClassificationResult(
+                decision="ask",
+                error=f"HTTPError: HTTP {exc.code} {exc.reason}",
+                http_status=exc.code,
+            )
+        except Exception as exc:
+            return ClassificationResult(decision="ask", error=f"{type(exc).__name__}: {exc}")
+
+        if not isinstance(data, dict):
+            return ClassificationResult(
+                decision="ask",
+                latency_ms=latency_ms,
+                error="Non-object JSON response from Gemini Decisions API",
+            )
+
+        answers = data.get("answers") or {}
+        if not isinstance(answers, dict):
+            return ClassificationResult(
+                decision="ask",
+                latency_ms=latency_ms,
+                raw=data,
+                error="Missing answers object in Gemini Decisions API response",
+            )
+
+        probs = _extract_choice_probs(answers.get("decision"))
+        risk_probs: dict[str, float] = {}
+        missing_or_bad_risks: list[str] = []
+        if self.schema_mode == "multi":
+            for key in ("destructive", "outside_workspace", "injection_or_obfuscation"):
+                if key not in answers:
+                    missing_or_bad_risks.append(key)
+                    continue
+                val = _extract_noul_prob(answers[key])
+                if val is None:
+                    missing_or_bad_risks.append(key)
+                else:
+                    risk_probs[key] = val
+
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        input_tokens = usage.get("total_input_tokens")
+        if input_tokens is None:
+            input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("total_output_tokens")
+        if output_tokens is None:
+            output_tokens = usage.get("output_tokens")
+
+        if not probs:
+            return ClassificationResult(
+                decision="ask",
+                probs=probs,
+                risk_probs=risk_probs,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                raw=data,
+                error="Could not parse decision probabilities",
+            )
+        if missing_or_bad_risks:
+            return ClassificationResult(
+                decision="ask",
+                probs=probs,
+                risk_probs=risk_probs,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                raw=data,
+                error=f"Missing or malformed risk probabilities: {', '.join(missing_or_bad_risks)}",
+            )
+
+        decision = apply_thresholds(probs, risk_probs, self.thresholds)
+        return ClassificationResult(
+            decision=decision,
+            probs=probs,
+            risk_probs=risk_probs,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            raw=data,
+            error=None,
+        )

@@ -17,11 +17,16 @@ from typing import Any
 from classifiers import (
     ClassificationResult,
     CompletionClassifier,
+    DEFAULT_GEMINI_DECISION_ENDPOINT,
+    DEFAULT_GEMINI_DECISION_MODEL,
+    GeminiDecisionClassifier,
     SystemOneClassifier,
     Thresholds,
     apply_thresholds,
 )
 from env import env_float, env_int, env_str, expand_path, load_dotenv
+
+REMOTE_BACKENDS = {"gemini_decision_free", "gemini_decision_paid"}
 
 
 def query_vram_mib() -> int | None:
@@ -119,6 +124,9 @@ def compute_metrics(
     p50 = statistics.median(lat_sorted) if lat_sorted else 0.0
     p95 = lat_sorted[min(len(lat_sorted) - 1, int(len(lat_sorted) * 0.95))] if lat_sorted else 0.0
     pmax = max(lat_sorted) if lat_sorted else 0.0
+    total_input_tokens = sum(
+        int(r["input_tokens"]) for r in records if isinstance(r.get("input_tokens"), int)
+    )
 
     # Offline threshold sweep over T_allow
     sweep: dict[str, dict[str, Any]] = {}
@@ -162,6 +170,7 @@ def compute_metrics(
         "p50_ms": round(p50, 1),
         "p95_ms": round(p95, 1),
         "max_ms": round(pmax, 1),
+        "total_input_tokens": total_input_tokens,
         "vram_total_mib": vram_total_mib,
         "vram_delta_mib": vram_delta_mib,
         "by_category": cat_stats,
@@ -184,6 +193,9 @@ def filter_existing_models(
     existing: list[dict[str, Any]] = []
     missing: list[tuple[dict[str, Any], Path]] = []
     for entry in models:
+        if entry.get("backend") in REMOTE_BACKENDS:
+            existing.append(entry)
+            continue
         model_path = expand_path(entry["path"])
         if model_path.is_file():
             existing.append(entry)
@@ -202,25 +214,27 @@ def run_model(
     thresholds: Thresholds,
     output_dir: Path,
     skip_server: bool = False,
+    delay_sec: float = 0.0,
 ) -> dict[str, Any]:
     name = entry["name"]
     backend = entry["backend"]
-    model_path = expand_path(entry["path"])
-    run_tag = f"{name}__{schema_mode}" if backend == "systemone" else name
+    is_remote = backend in REMOTE_BACKENDS
+    model_path = expand_path(entry.get("path", "")) if not is_remote else Path("")
+    run_tag = f"{name}__{schema_mode}" if backend in ("systemone", *REMOTE_BACKENDS) else name
     endpoint = f"http://{host}:{port}"
 
     print(f"\n=== Benchmarking: {run_tag} ({backend}) ===")
-    if not skip_server and not model_path.exists():
+    if not is_remote and not skip_server and not model_path.exists():
         msg = f"Model file not found: {model_path}"
         print(f"  [SKIP] {msg}")
         return {"run_tag": run_tag, "backend": backend, "status": "missing", "error": msg}
 
-    vram_before = query_vram_mib()
+    vram_before = None if is_remote else query_vram_mib()
     proc: subprocess.Popen[Any] | None = None
     log_handle = None
 
     try:
-        if not skip_server:
+        if not is_remote and not skip_server:
             cmd = [
                 llama_server_bin,
                 "-m",
@@ -254,7 +268,7 @@ def run_model(
                     "server_log": str(server_log),
                 }
 
-        classifier: SystemOneClassifier | CompletionClassifier
+        classifier: SystemOneClassifier | CompletionClassifier | GeminiDecisionClassifier
         if backend == "systemone":
             classifier = SystemOneClassifier(
                 endpoint=endpoint,
@@ -268,28 +282,54 @@ def run_model(
                 timeout_sec=10.0,
                 thresholds=thresholds,
             )
+        elif backend in REMOTE_BACKENDS:
+            if backend == "gemini_decision_paid":
+                api_key = env_str("AGY_GUARDIAN_GEMINI_PAID_API_KEY", "")
+            else:
+                api_key = env_str("AGY_GUARDIAN_GEMINI_FREE_API_KEY", "")
+            if not api_key:
+                msg = f"Missing API key for {backend} in environment/.env"
+                print(f"  [ERROR] {msg}")
+                return {"run_tag": run_tag, "backend": backend, "status": "missing_key", "error": msg}
+            classifier = GeminiDecisionClassifier(
+                api_key=api_key,
+                endpoint=env_str("AGY_GUARDIAN_GEMINI_ENDPOINT", DEFAULT_GEMINI_DECISION_ENDPOINT),
+                model=entry.get("model") or env_str("AGY_GUARDIAN_GEMINI_MODEL", DEFAULT_GEMINI_DECISION_MODEL),
+                schema_mode=schema_mode,
+                timeout_sec=15.0,
+                thresholds=thresholds,
+            )
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 
-        # Warmup (populates KV cache for completion / compiles CUDA graphs)
-        for warmup_case in cases[:2]:
+        # Warmup (populates KV cache for completion / compiles CUDA graphs / opens TLS)
+        warmup_cases = cases[:1] if is_remote else cases[:2]
+        for warmup_case in warmup_cases:
             wres = classifier.classify(warmup_case)
             if wres.error:
                 print(f"  [WARN] Warmup error on {warmup_case['id']}: {wres.error}")
 
-        vram_after = query_vram_mib()
+        vram_after = None if is_remote else query_vram_mib()
         vram_delta = (
             (vram_after - vram_before)
             if (vram_after is not None and vram_before is not None)
             else None
         )
-        print(f"  VRAM: total={vram_after} MiB, delta={vram_delta} MiB")
+        if not is_remote:
+            print(f"  VRAM: total={vram_after} MiB, delta={vram_delta} MiB")
 
         records: list[dict[str, Any]] = []
         jsonl_path = output_dir / f"{run_tag}.jsonl"
         with jsonl_path.open("w", encoding="utf-8") as jf:
-            for case in cases:
+            for idx, case in enumerate(cases):
                 res: ClassificationResult = classifier.classify(case)
+                if is_remote and res.http_status == 429:
+                    for backoff in (15.0, 30.0, 60.0):
+                        print(f"  [429] Rate limited on {case['id']} ({idx + 1}/{len(cases)}); sleeping {backoff:.0f}s...")
+                        time.sleep(backoff)
+                        res = classifier.classify(case)
+                        if res.http_status != 429:
+                            break
                 rec = {
                     "id": case["id"],
                     "category": case["category"],
@@ -305,6 +345,8 @@ def run_model(
                 }
                 records.append(rec)
                 jf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if delay_sec > 0 and idx + 1 < len(cases):
+                    time.sleep(delay_sec)
 
         metrics = compute_metrics(records, thresholds, vram_after, vram_delta)
         print(
@@ -314,7 +356,7 @@ def run_model(
             f"Deny-Recall={metrics['deny_recall_pct']}%, "
             f"Exact={metrics['exact_acc_pct']}%, "
             f"p50={metrics['p50_ms']}ms, p95={metrics['p95_ms']}ms, "
-            f"Brier={metrics['brier_allow']}, Errors={metrics['errors']}"
+            f"Brier={metrics['brier_allow']}, Tokens={metrics['total_input_tokens']}, Errors={metrics['errors']}"
         )
         if metrics["false_allow_ids"]:
             print(f"  False-Allow IDs: {metrics['false_allow_ids']}")
@@ -336,7 +378,7 @@ def run_model(
                 proc.wait(timeout=5)
         if log_handle is not None:
             log_handle.close()
-        if not skip_server:
+        if not is_remote and not skip_server:
             time.sleep(1.0)  # Let GPU release VRAM cleanly before next model
 
 
@@ -476,22 +518,23 @@ def main() -> int:
         default=env_float("AGY_GUARDIAN_RISK_MAX_PROB", 0.25),
     )
     parser.add_argument("--skip-server", action="store_true", help="Query an already-running server")
+    parser.add_argument(
+        "--gemini-tier",
+        choices=("free", "paid"),
+        default="",
+        help="Benchmark remote Gemini Decision 1 directly using Free or Paid Tier API key (skips local manifest)",
+    )
+    parser.add_argument(
+        "--delay-sec",
+        type=float,
+        default=0.0,
+        help="Optional inter-request delay in seconds (useful for Free Tier rate limits)",
+    )
     args = parser.parse_args()
 
-    llama_bin = args.llama_server or shutil.which("llama-server")
-    if not args.skip_server and not llama_bin:
-        print(
-            "ERROR: Could not locate llama-server on PATH. Set AGY_GUARDIAN_LLAMA_SERVER in .env or pass --llama-server.",
-            file=sys.stderr,
-        )
-        return 2
-
-    manifest_path = expand_path(args.manifest)
     cases_path = expand_path(args.cases)
     output_dir = expand_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     cases = json.loads(cases_path.read_text(encoding="utf-8"))
     thresholds = Thresholds(
         allow_min_prob=args.allow_threshold,
@@ -499,44 +542,80 @@ def main() -> int:
         risk_max_prob=args.risk_max_prob,
     )
 
-    excludes = [x.strip().lower() for x in args.exclude.split(",") if x.strip()]
-    models = [
-        m
-        for m in manifest
-        if (not args.model or args.model.lower() in m["name"].lower())
-        and not any(ex in m["name"].lower() for ex in excludes)
-    ]
-    if not models:
-        print(f"No models matched filter {args.model!r} in {manifest_path}", file=sys.stderr)
-        return 1
+    if args.gemini_tier:
+        backend_name = f"gemini_decision_{args.gemini_tier}"
+        model_id = env_str("AGY_GUARDIAN_GEMINI_MODEL", DEFAULT_GEMINI_DECISION_MODEL)
+        models = [{"name": f"{model_id}-{args.gemini_tier}", "backend": backend_name, "model": model_id}]
+        llama_bin = ""
+    else:
+        llama_bin = args.llama_server or shutil.which("llama-server")
+        manifest_path = expand_path(args.manifest)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    models, missing_models = filter_existing_models(models, skip_server=args.skip_server)
-    for entry, missing_path in missing_models:
-        print(
-            f"[WARN] Skipping missing model '{entry['name']}': {missing_path}",
-            file=sys.stderr,
-        )
-    if not models:
-        print(
-            f"ERROR: None of the matched models exist on disk (checked {len(missing_models)} from {manifest_path}).",
-            file=sys.stderr,
-        )
-        return 1
+        excludes = [x.strip().lower() for x in args.exclude.split(",") if x.strip()]
+        models = [
+            m
+            for m in manifest
+            if (not args.model or args.model.lower() in m["name"].lower())
+            and not any(ex in m["name"].lower() for ex in excludes)
+        ]
+        if not models:
+            print(f"No models matched filter {args.model!r} in {manifest_path}", file=sys.stderr)
+            return 1
+
+        needs_local_server = any(m.get("backend") not in REMOTE_BACKENDS for m in models)
+        if needs_local_server and not args.skip_server and not llama_bin:
+            print(
+                "ERROR: Could not locate llama-server on PATH. Set AGY_GUARDIAN_LLAMA_SERVER in .env or pass --llama-server.",
+                file=sys.stderr,
+            )
+            return 2
+
+        models, missing_models = filter_existing_models(models, skip_server=args.skip_server)
+        for entry, missing_path in missing_models:
+            print(
+                f"[WARN] Skipping missing model '{entry['name']}': {missing_path}",
+                file=sys.stderr,
+            )
+        if not models:
+            print(
+                f"ERROR: None of the matched models exist on disk (checked {len(missing_models)} from {manifest_path}).",
+                file=sys.stderr,
+            )
+            return 1
 
     results: list[dict[str, Any]] = []
     for entry in models:
-        if entry["backend"] == "systemone" and args.schema == "both":
+        if entry["backend"] in ("systemone", *REMOTE_BACKENDS) and args.schema == "both":
             for mode in ("single", "multi"):
                 results.append(
                     run_model(
-                        entry, cases, llama_bin or "", args.host, args.port, mode, thresholds, output_dir, args.skip_server
+                        entry,
+                        cases,
+                        llama_bin or "",
+                        args.host,
+                        args.port,
+                        mode,
+                        thresholds,
+                        output_dir,
+                        args.skip_server,
+                        delay_sec=args.delay_sec,
                     )
                 )
         else:
             mode = "single" if args.schema == "single" else "multi"
             results.append(
                 run_model(
-                    entry, cases, llama_bin or "", args.host, args.port, mode, thresholds, output_dir, args.skip_server
+                    entry,
+                    cases,
+                    llama_bin or "",
+                    args.host,
+                    args.port,
+                    mode,
+                    thresholds,
+                    output_dir,
+                    args.skip_server,
+                    delay_sec=args.delay_sec,
                 )
             )
 

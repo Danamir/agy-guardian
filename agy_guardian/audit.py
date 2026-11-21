@@ -27,11 +27,14 @@ def build_audit_record(
     probs: dict[str, float] | None = None,
     risk_probs: dict[str, float] | None = None,
     latency_ms: float = 0.0,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    estimated_cost_usd: float | None = None,
     error: str | None = None,
     policy_name: str | None = None,
     policy_error: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    record: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "conversationId": conversation_id,
         "stepIdx": step_idx,
@@ -50,6 +53,13 @@ def build_audit_record(
         "policyName": policy_name,
         "policyError": policy_error,
     }
+    if input_tokens is not None:
+        record["inputTokens"] = input_tokens
+    if output_tokens is not None:
+        record["outputTokens"] = output_tokens
+    if estimated_cost_usd is not None:
+        record["estimatedCostUsd"] = estimated_cost_usd
+    return record
 
 
 def _backup_path(base: Path, index: int) -> Path:
@@ -102,3 +112,64 @@ def write_audit_entry(
         return None
     except Exception as exc:
         return f"{type(exc).__name__}: {exc}"
+
+
+def summarize_audit_usage(path: Path, *, backups: int = DEFAULT_BACKUPS) -> dict[str, Any]:
+    """Aggregate local token counts and estimated USD spend from JSONL audit logs."""
+    files: list[Path] = []
+    for idx in range(max(0, backups), 0, -1):
+        bp = _backup_path(path, idx)
+        if bp.is_file():
+            files.append(bp)
+    if path.is_file():
+        files.append(path)
+
+    total_calls = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_cost_usd = 0.0
+    by_layer: dict[str, dict[str, Any]] = {}
+
+    for fp in files:
+        try:
+            lines = fp.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            total_calls += 1
+            layer = str(rec.get("layer") or "unknown")
+            entry = by_layer.setdefault(
+                layer,
+                {"calls": 0, "inputTokens": 0, "outputTokens": 0, "estimatedCostUsd": 0.0},
+            )
+            entry["calls"] += 1
+            in_tok = rec.get("inputTokens")
+            out_tok = rec.get("outputTokens")
+            cost = rec.get("estimatedCostUsd")
+            if isinstance(in_tok, int):
+                total_input_tokens += in_tok
+                entry["inputTokens"] += in_tok
+            if isinstance(out_tok, int):
+                total_output_tokens += out_tok
+                entry["outputTokens"] += out_tok
+            if isinstance(cost, (int, float)):
+                total_cost_usd += float(cost)
+                entry["estimatedCostUsd"] = round(entry["estimatedCostUsd"] + float(cost), 8)
+
+    return {
+        "filesScanned": len(files),
+        "totalCalls": total_calls,
+        "totalInputTokens": total_input_tokens,
+        "totalOutputTokens": total_output_tokens,
+        "totalEstimatedCostUsd": round(total_cost_usd, 8),
+        "byLayer": by_layer,
+    }

@@ -17,6 +17,25 @@ DEFAULT_AUDIT_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_AUDIT_BACKUPS = 3
 DEFAULT_POLICY_FILE = "~/.gemini/config/agy_guardian_policies.json"
 DEFAULT_SESSION_BRAIN_ROOT = "~/.gemini/antigravity-cli/brain"
+DEFAULT_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/decisions"
+DEFAULT_GEMINI_MODEL = "gemini-decision-1"
+DEFAULT_GEMINI_MAX_USER_INPUT_CHARS = 2000
+GEMINI_PAID_USD_PER_MILLION_INPUT_TOKENS = 0.10
+VALID_BACKENDS = (
+    "systemone",
+    "completion",
+    "auto",
+    "gemini_decision_paid",
+    "gemini_decision_free",
+    "gemini_decision",
+)
+VALID_FALLBACK_BACKENDS = (
+    "none",
+    "gemini_decision_paid",
+    "gemini_decision_free",
+    "completion",
+    "systemone",
+)
 _SAFE_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
 
 
@@ -90,10 +109,17 @@ class GuardianConfig:
     host: str = "127.0.0.1"
     port: int = 8099
     endpoint: str = ""
-    backend: str = "systemone"  # "systemone" | "completion" | "auto"
+    backend: str = "systemone"  # "systemone" | "completion" | "auto" | "gemini_decision_paid" | "gemini_decision_free" | "gemini_decision"
+    fallback_backend: str = "none"  # "none" | "gemini_decision_paid" | "gemini_decision_free" | "completion" | "systemone"
     schema_mode: str = "multi"  # "multi" | "single"
     timeout_sec: float = 4.0
     fallback_endpoint: str = ""
+    gemini_paid_api_key: str = field(default="", repr=False)
+    gemini_free_api_key: str = field(default="", repr=False)
+    gemini_tier: str = ""  # "paid" | "free" | "" (only used if bare backend="gemini_decision")
+    gemini_endpoint: str = DEFAULT_GEMINI_ENDPOINT
+    gemini_model: str = DEFAULT_GEMINI_MODEL
+    gemini_max_user_input_chars: int = DEFAULT_GEMINI_MAX_USER_INPUT_CHARS
     allow_min_prob: float = 0.85
     deny_min_prob: float = 0.85
     risk_max_prob: float = 0.25
@@ -114,6 +140,20 @@ class GuardianConfig:
         if self.endpoint:
             return self.endpoint.rstrip("/")
         return f"http://{self.host}:{self.port}"
+
+    def resolve_backend_name(self, name: str | None = None) -> tuple[str | None, str | None]:
+        """Resolve a backend name, enforcing explicit tier selection for bare 'gemini_decision'."""
+        raw = (self.backend if name is None else name).strip().lower()
+        if raw == "gemini_decision":
+            tier = (self.gemini_tier or "").strip().lower()
+            if tier == "paid":
+                return "gemini_decision_paid", None
+            if tier == "free":
+                return "gemini_decision_free", None
+            return None, "Bare 'gemini_decision' backend requires explicit AGY_GUARDIAN_GEMINI_TIER=paid|free"
+        if raw in ("systemone", "completion", "auto", "gemini_decision_paid", "gemini_decision_free"):
+            return raw, None
+        return None, f"Unsupported Layer 3 backend '{raw}'"
 
     @property
     def audit_enabled(self) -> bool:
@@ -162,11 +202,30 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
     port = env_int("AGY_GUARDIAN_PORT", 8099)
     endpoint = env_str("AGY_GUARDIAN_ENDPOINT", "")
     backend = env_str("AGY_GUARDIAN_BACKEND", "systemone").strip().lower()
-    if backend not in ("systemone", "completion", "auto"):
+    if backend not in VALID_BACKENDS:
         backend = "systemone"
+    fallback_backend = env_str("AGY_GUARDIAN_FALLBACK_BACKEND", "none").strip().lower()
+    if fallback_backend not in VALID_FALLBACK_BACKENDS:
+        fallback_backend = "none"
     schema_mode = env_str("AGY_GUARDIAN_SCHEMA_MODE", "multi").strip().lower()
     if schema_mode not in ("multi", "single"):
         schema_mode = "multi"
+
+    # Strict key isolation:
+    # - Paid Tier reads ONLY AGY_GUARDIAN_GEMINI_PAID_API_KEY (never Free or generic GEMINI_API_KEY).
+    # - Free Tier reads AGY_GUARDIAN_GEMINI_FREE_API_KEY, falling back to generic keys only on explicit Free opt-in.
+    gemini_paid_api_key = env_str("AGY_GUARDIAN_GEMINI_PAID_API_KEY", "")
+    gemini_free_api_key = (
+        env_str("AGY_GUARDIAN_GEMINI_FREE_API_KEY", "")
+        or env_str("AGY_GUARDIAN_GEMINI_API_KEY", "")
+        or env_str("GEMINI_API_KEY", "")
+    )
+    gemini_tier = env_str("AGY_GUARDIAN_GEMINI_TIER", "").strip().lower()
+    gemini_endpoint = env_str("AGY_GUARDIAN_GEMINI_ENDPOINT", DEFAULT_GEMINI_ENDPOINT)
+    gemini_model = env_str("AGY_GUARDIAN_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    gemini_max_user_input_chars = env_int(
+        "AGY_GUARDIAN_GEMINI_MAX_USER_INPUT_CHARS", DEFAULT_GEMINI_MAX_USER_INPUT_CHARS
+    )
 
     raw_audit = os.environ.get("AGY_GUARDIAN_AUDIT_LOG")
     audit_log_path = DEFAULT_AUDIT_LOG if (raw_audit is None or raw_audit.strip() == "") else raw_audit.strip()
@@ -182,9 +241,16 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         port=port,
         endpoint=endpoint,
         backend=backend,
+        fallback_backend=fallback_backend,
         schema_mode=schema_mode,
         timeout_sec=env_float("AGY_GUARDIAN_TIMEOUT_SEC", 4.0),
         fallback_endpoint=env_str("AGY_GUARDIAN_FALLBACK_ENDPOINT", "").rstrip("/"),
+        gemini_paid_api_key=gemini_paid_api_key,
+        gemini_free_api_key=gemini_free_api_key,
+        gemini_tier=gemini_tier,
+        gemini_endpoint=gemini_endpoint,
+        gemini_model=gemini_model,
+        gemini_max_user_input_chars=gemini_max_user_input_chars,
         allow_min_prob=env_float("AGY_GUARDIAN_ALLOW_THRESHOLD", 0.85),
         deny_min_prob=env_float("AGY_GUARDIAN_DENY_THRESHOLD", 0.85),
         risk_max_prob=env_float("AGY_GUARDIAN_RISK_MAX_PROB", 0.25),

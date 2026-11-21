@@ -30,6 +30,8 @@ All runs evaluate Layer 3 directly with **no Layer 1 hard-deny or Layer 2 fast-a
 | `kev-4b-q4_k_m__single` | `systemone` | **0** | 0 | 60.0% | 0.0% | 50.0% | `0.683` / `0.879` (-0.196) | 0.0331 | 47.6 / 110.4 | +5287 | 0 |
 | `kev-4b-q4_k_m__multi` | `systemone` | **0** | 0 | 26.7% | 12.9% | 43.0% | `0.683` / `0.879` (-0.196) | 0.0331 | 142.1 / 194.7 | +5260 | 0 |
 | `gemma-4-e4b-completion` | `completion` | **1** | 0 | **100.0%** | **80.6%** | **90.7%** | `1.000` / `0.998` (+0.002) | 0.0116 | **49.0 / 61.4** | **+3533** | 0 |
+| **`gemini-decision-1__single`** *(remote)* | `gemini_decision_free` | **0** | 0 | **100.0%** | 71.0% | 89.5% | **`0.926` / `0.321` (+0.605)** | **0.0016** | 325.5 / 600.2 | n/a | 0 |
+| **`gemini-decision-1__multi`** *(remote)* | `gemini_decision_free` | **0** | 0 | 93.3% | **90.3%** | **94.2%** | **`0.926` / `0.321` (+0.605)** | **0.0016** | 362.6 / 703.9 | n/a | 0 |
 
 ---
 
@@ -46,6 +48,8 @@ All runs evaluate Layer 3 directly with **no Layer 1 hard-deny or Layer 2 fast-a
 | `kev-4b-q4_k_m__single` | 1 FA / 96.7% | 1 FA / 93.3% | 1 FA / 90.0% | 0 FA / 60.0% | 0 FA / 0.0% |
 | `kev-4b-q4_k_m__multi` | 0 FA / 53.3% | 0 FA / 50.0% | 0 FA / 46.7% | 0 FA / 26.7% | 0 FA / 0.0% |
 | `gemma-4-e4b-completion` | 1 FA / 100.0% | 1 FA / 100.0% | 1 FA / 100.0% | 1 FA / 100.0% | 1 FA / 100.0% |
+| `gemini-decision-1__single` | **0 FA / 100.0%** | **0 FA / 100.0%** | **0 FA / 100.0%** | **0 FA / 100.0%** | 0 FA / 90.0% |
+| `gemini-decision-1__multi` | 0 FA / 93.3% | 0 FA / 93.3% | 0 FA / 93.3% | 0 FA / 93.3% | 0 FA / 83.3% |
 
 ---
 
@@ -62,6 +66,8 @@ All runs evaluate Layer 3 directly with **no Layer 1 hard-deny or Layer 2 fast-a
 | `kev-4b-q4_k_m__single` | 6/10 | 7/10 | 5/10 | 13/13 | 12/12 | 0/8 | 0/10 | 0/5 | 0/8 |
 | `kev-4b-q4_k_m__multi` | 3/10 | 1/10 | 4/10 | 13/13 | 12/12 | 0/8 | 1/10 | 2/5 | 1/8 |
 | `gemma-4-e4b-completion` | 10/10 | 10/10 | **10/10** | 13/13 | 10/12 (**1 FA**) | 7/8 | 8/10 | 4/5 | 6/8 |
+| `gemini-decision-1__single` | 10/10 | **10/10** | **10/10** | 13/13 | **12/12** | 4/8 | 6/10 | **5/5** | **7/8** |
+| `gemini-decision-1__multi` | 10/10 | 8/10 | **10/10** | 13/13 | **12/12** | **7/8** | **9/10** | **5/5** | **7/8** |
 
 ## False-Allow Details (at Default Thresholds)
 
