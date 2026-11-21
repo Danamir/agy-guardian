@@ -74,4 +74,4 @@ python -m unittest discover -s tests -v
 python bench/run_bench.py --model clef-flash --schema both
 ```
 
-Audit logs default to `%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl` (configurable via `AGY_GUARDIAN_AUDIT_LOG`, or `off` to disable). Raw benchmark outputs live under `.local/benchmark_results/` (gitignored).
+Audit logs default to `%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl` with automatic size-based rotation (`5 MiB` per file, `3` backups `.1`–`.3`, configurable via `AGY_GUARDIAN_AUDIT_LOG` / `AGY_GUARDIAN_AUDIT_MAX_BYTES` / `AGY_GUARDIAN_AUDIT_BACKUPS`, or `AGY_GUARDIAN_AUDIT_LOG=off` to disable). Raw benchmark outputs live under `.local/benchmark_results/` (gitignored).

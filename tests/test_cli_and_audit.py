@@ -138,6 +138,48 @@ class TestCliAndAudit(unittest.TestCase):
             # Audit log captured all 3 invocations
             self.assertEqual(len(audit_file.read_text(encoding="utf-8").splitlines()), 3)
 
+    def test_audit_log_rotates_when_exceeding_max_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "audit.jsonl"
+            # Small cap (~500 bytes) forces rotation on nearly every entry, keeping max 2 backups
+            cfg = GuardianConfig(
+                audit_log_path=str(audit_file),
+                audit_fail_closed=True,
+                audit_max_bytes=500,
+                audit_backups=2,
+            )
+            for idx in range(6):
+                rep = handle_hook_payload(_hook_payload(f"git status # {idx}"), cfg)
+                self.assertEqual(rep.decision, "allow")
+                self.assertIsNone(rep.audit_error)
+
+            b1 = Path(tmp) / "audit.jsonl.1"
+            b2 = Path(tmp) / "audit.jsonl.2"
+            b3 = Path(tmp) / "audit.jsonl.3"
+            self.assertTrue(audit_file.is_file())
+            self.assertTrue(b1.is_file())
+            self.assertTrue(b2.is_file())
+            self.assertFalse(b3.exists(), "Should not exceed configured backup count")
+
+            # Active file has the latest entry
+            latest = json.loads(audit_file.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertIn("# 5", latest["commandLine"])
+
+            # backups=0 truncates cleanly without creating .1
+            audit_zero = Path(tmp) / "zero.jsonl"
+            cfg_zero = GuardianConfig(
+                audit_log_path=str(audit_zero),
+                audit_fail_closed=True,
+                audit_max_bytes=500,
+                audit_backups=0,
+            )
+            for idx in range(4):
+                rep = handle_hook_payload(_hook_payload(f"git status # {idx}"), cfg_zero)
+                self.assertEqual(rep.decision, "allow")
+            self.assertTrue(audit_zero.is_file())
+            self.assertFalse((Path(tmp) / "zero.jsonl.1").exists())
+            self.assertEqual(len(audit_zero.read_text(encoding="utf-8").splitlines()), 1)
+
     def test_subprocess_hook_handles_non_ascii_under_cp850_stdout(self) -> None:
         """Simulate Windows cmd /c legacy codepage (cp850) with UTF-8 stdin & non-ASCII errors."""
         with tempfile.TemporaryDirectory() as tmp:

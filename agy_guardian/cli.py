@@ -62,7 +62,12 @@ def _finalize_with_audit(
         policy_name=report.policy_name,
         policy_error=report.policy_error,
     )
-    err = write_audit_entry(audit_path, record)
+    err = write_audit_entry(
+        audit_path,
+        record,
+        max_bytes=config.audit_max_bytes,
+        backups=config.audit_backups,
+    )
     if err is not None:
         report.audit_error = err
         if config.audit_fail_closed and report.decision == "allow":

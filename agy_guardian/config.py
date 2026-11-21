@@ -12,6 +12,8 @@ from string import Template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AUDIT_LOG = "~/.gemini/config/agy_guardian.log.jsonl"
+DEFAULT_AUDIT_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
+DEFAULT_AUDIT_BACKUPS = 3
 DEFAULT_POLICY_FILE = "~/.gemini/config/agy_guardian_policies.json"
 
 
@@ -94,6 +96,8 @@ class GuardianConfig:
     risk_max_prob: float = 0.25
     audit_log_path: str = DEFAULT_AUDIT_LOG
     audit_fail_closed: bool = True
+    audit_max_bytes: int = DEFAULT_AUDIT_MAX_BYTES
+    audit_backups: int = DEFAULT_AUDIT_BACKUPS
     policy_file: str = DEFAULT_POLICY_FILE
     extra_workspaces: list[str] = field(default_factory=list)
     enable_layer1: bool = True
@@ -165,6 +169,8 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         risk_max_prob=env_float("AGY_GUARDIAN_RISK_MAX_PROB", 0.25),
         audit_log_path=audit_log_path,
         audit_fail_closed=env_bool("AGY_GUARDIAN_AUDIT_FAIL_CLOSED", True),
+        audit_max_bytes=env_int("AGY_GUARDIAN_AUDIT_MAX_BYTES", DEFAULT_AUDIT_MAX_BYTES),
+        audit_backups=env_int("AGY_GUARDIAN_AUDIT_BACKUPS", DEFAULT_AUDIT_BACKUPS),
         policy_file=policy_file,
         extra_workspaces=extra_workspaces,
         enable_layer1=env_bool("AGY_GUARDIAN_ENABLE_LAYER1", True),
