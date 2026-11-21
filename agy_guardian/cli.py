@@ -14,8 +14,17 @@ from .config import GuardianConfig, load_config
 from .pipeline import DecisionReport, evaluate_command
 
 
+_HOOK_WIRE_DECISION_MAP = {
+    "allow": "auto_approve",
+    "auto_approve": "auto_approve",
+    "ask": "ask",
+    "force_ask": "force_ask",
+    "deny": "deny",
+}
+
+
 def _emit_hook_response(decision: str, reason: str) -> None:
-    safe_decision = decision if decision in ("allow", "ask", "force_ask", "deny") else "ask"
+    safe_decision = _HOOK_WIRE_DECISION_MAP.get(decision, "ask")
     payload = {"decision": safe_decision, "reason": reason}
     # Always emit pure 7-bit ASCII JSON (\uXXXX escapes) so Windows cmd/cp850/cp1252
     # pipes never raise UnicodeEncodeError or emit invalid UTF-8 bytes to Antigravity.

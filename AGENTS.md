@@ -23,7 +23,7 @@ Workspace instructions for coding agents working in this repository.
 - **Python environment (`uv`):** If third-party Python dev tools (e.g., `pytest`, `ruff`) are introduced, use `uv` to initialize and manage a `.venv` virtual environment pinned to Python 3.12 (`uv venv --python 3.12 .venv` / `uv sync`).
 - **Antigravity Hook Contract (`PreToolUse`):**
   - Stdin: camelCase JSON (`conversationId`, `workspacePaths`, `cwd`, `lastUserInput`, `hookEventName`, `toolCall.name`, `toolCall.args.CommandLine`, `stepIdx`).
-  - Stdout: JSON with `decision` (`"allow"` | `"ask"` | `"force_ask"` | `"deny"`) and optional `reason`.
+  - Stdout: JSON with `decision` (`"auto_approve"` for allowed commands, `"ask"`, `"force_ask"`, or `"deny"`) and optional `reason`.
 - **Windows-first shell awareness:** Account for PowerShell 5.1 (`Remove-Item`, `ri`, `iwr | iex`, backtick obfuscation, `-EncodedCommand`, `;`, `|`, `cmd /c`, `powershell -c`) alongside Git Bash (`&&`, `||`, `rm -rf`, `curl | bash`).
 
 ## Repository & Privacy Hygiene

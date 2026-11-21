@@ -92,7 +92,7 @@ class TestCliAndAudit(unittest.TestCase):
             env["AGY_GUARDIAN_AUDIT_LOG"] = str(audit_file)
             env["AGY_GUARDIAN_PORT"] = "18999"  # Unreachable port for offline L3 fail-closed test
 
-            # 1. L2 fast-allow via subprocess stdin/stdout
+            # 1. L2 fast-allow emits wire decision "auto_approve" via subprocess stdin/stdout
             proc_allow = subprocess.run(
                 [sys.executable, str(HOOK_SCRIPT)],
                 input=_hook_payload("git status"),
@@ -104,7 +104,7 @@ class TestCliAndAudit(unittest.TestCase):
             )
             self.assertEqual(proc_allow.returncode, 0, proc_allow.stderr)
             out_allow = json.loads(proc_allow.stdout)
-            self.assertEqual(out_allow["decision"], "allow")
+            self.assertEqual(out_allow["decision"], "auto_approve")
             self.assertIn("reason", out_allow)
 
             # 2. L1 hard-deny via subprocess stdin/stdout
