@@ -377,6 +377,100 @@ class TestClassifiersAndPipeline(unittest.TestCase):
             self.assertEqual(rep.decision, "ask", cmd)
             self.assertNotEqual(rep.layer, "L2_allow", cmd)
 
+    def test_completion_classifier_fails_closed_without_logprobs(self) -> None:
+        clf = CompletionClassifier()
+        case = {"cwd": CWD, "workspacePaths": WS, "lastUserInput": "test", "commandLine": "pytest -q"}
+        no_logprobs = {"choices": [{"message": {"content": "A"}}], "usage": {"prompt_tokens": 50, "completion_tokens": 1}}
+        with patch("agy_guardian.classifiers._post_json", return_value=(no_logprobs, 15.0)):
+            res = clf.classify(case)
+            self.assertEqual(res.decision, "ask")
+            self.assertEqual(res.probs, {})
+            self.assertIsNotNone(res.error)
+
+    def test_threshold_range_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            Thresholds(allow_min_prob=0.3)
+        with self.assertRaises(ValueError):
+            Thresholds(deny_min_prob=1.2)
+        with self.assertRaises(ValueError):
+            Thresholds(risk_max_prob=0.8)
+        with self.assertRaises(ValueError):
+            Thresholds(allow_min_prob=float("nan"))
+        with self.assertRaises(ValueError):
+            GuardianConfig(allow_min_prob=0.3)
+        with self.assertRaises(ValueError):
+            GuardianConfig(risk_max_prob=-0.1)
+
+    def test_recent_commands_passed_to_layer3_alongside_assistant_tail(self) -> None:
+        import tempfile
+        from agy_guardian.audit import build_audit_record, write_audit_entry
+        from agy_guardian.classifiers import GeminiDecisionClassifier
+
+        cid = "833ebcb1-aec1-4523-9637-c90900c2faaa"
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "audit.jsonl"
+            for cmd in ("git diff", "git add -A", "pytest -q"):
+                rec = build_audit_record(
+                    conversation_id=cid,
+                    step_idx=1,
+                    tool_name="run_command",
+                    command_line=cmd,
+                    cwd=CWD,
+                    workspace_paths=WS,
+                    layer="L2_allow",
+                    rule_id=None,
+                    decision="allow",
+                    reason="ok",
+                )
+                write_audit_entry(audit_file, rec)
+            # Entry from another conversation must not leak in
+            other_rec = build_audit_record(
+                conversation_id="other-conv-99999",
+                step_idx=1,
+                tool_name="run_command",
+                command_line="rm -rf /tmp/other",
+                cwd=CWD,
+                workspace_paths=WS,
+                layer="L3_systemone",
+                rule_id=None,
+                decision="ask",
+                reason="ask",
+            )
+            write_audit_entry(audit_file, other_rec)
+
+            captured: list[dict] = []
+
+            class CaptureClassifier:
+                def classify(self, case: dict) -> ClassificationResult:
+                    captured.append(case)
+                    return ClassificationResult(decision="allow", probs={"allow": 0.96, "ask": 0.03, "deny": 0.01})
+
+            cfg = GuardianConfig(
+                audit_log_path=str(audit_file),
+                policy_file="off",
+                include_recent_commands=True,
+                recent_commands_limit=2,
+            )
+            evaluate_command(
+                "git commit -m 'fix'",
+                CWD,
+                WS,
+                "Yes",
+                cfg,
+                classifier=CaptureClassifier(),
+                conversation_id=cid,
+            )
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0].get("recentCommands"), ["git add -A", "pytest -q"])
+
+            # Verify all 3 classifiers serialize recentCommands cleanly
+            s1_payload = SystemOneClassifier().build_payload(captured[0])
+            self.assertEqual(s1_payload["state"]["recentCommands"], ["git add -A", "pytest -q"])
+            comp_msgs = CompletionClassifier().build_messages(captured[0])
+            self.assertIn("recentCommands:", comp_msgs[1]["content"])
+            gem_payload = GeminiDecisionClassifier(api_key="test-key").build_payload(captured[0])
+            self.assertIn("recentCommands", gem_payload["input"])
+
 
 if __name__ == "__main__":
     unittest.main()

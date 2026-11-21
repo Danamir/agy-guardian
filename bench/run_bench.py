@@ -463,6 +463,16 @@ def render_markdown_report(results: list[dict[str, Any]], thresholds: Thresholds
     return "\n".join(lines) + "\n"
 
 
+def _safe_print(text: str) -> None:
+    """Print text safely even on legacy Windows console encodings (e.g. cp1252/cp850)."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        safe = text.encode(enc, errors="replace").decode(enc, errors="replace")
+        print(safe)
+
+
 def main() -> int:
     load_dotenv()
 
@@ -624,8 +634,8 @@ def main() -> int:
     report_path.write_text(report_md, encoding="utf-8")
     (output_dir / "summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-    print("\n" + report_md)
-    print(f"Saved report to {report_path}")
+    _safe_print("\n" + report_md)
+    _safe_print(f"Saved report to {report_path}")
     return 0
 
 

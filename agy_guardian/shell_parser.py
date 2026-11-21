@@ -359,6 +359,35 @@ def _scan_unquoted_token(raw: str, add_opaque) -> None:
         pass
 
 
+def _normalize_cmd_caret_escapes(text: str) -> tuple[str, bool]:
+    """Strip unquoted cmd.exe `^` escape characters and report whether any were found."""
+    if "^" not in text:
+        return text, False
+    out: list[str] = []
+    in_double = False
+    found = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            in_double = not in_double
+            out.append(ch)
+            i += 1
+            continue
+        if not in_double and ch == "^":
+            found = True
+            if i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+            else:
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), found
+
+
 def _extract_wrapper_inner(
     seg: CommandSegment,
 ) -> tuple[str | None, str | None, list[str]]:
@@ -380,6 +409,10 @@ def _extract_wrapper_inner(
                 if not rest:
                     return "cmd", None, extra_opaque + ["empty_wrapper"]
                 inner = rest[0].text if len(rest) == 1 else " ".join(t.raw for t in rest)
+                inner_norm, had_caret = _normalize_cmd_caret_escapes(inner)
+                if had_caret:
+                    extra_opaque.append("cmd_caret_escape")
+                    inner = inner_norm
                 return "cmd", inner, extra_opaque
         return None, None, []
 

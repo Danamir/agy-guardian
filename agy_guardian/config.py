@@ -5,6 +5,7 @@ Precedence: explicit overrides / CLI flags > OS environment variables > .env > c
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -134,9 +135,25 @@ class GuardianConfig:
     include_last_assistant: bool = True
     last_assistant_max_user_chars: int = 80
     last_assistant_max_chars: int = 500
+    include_recent_commands: bool = True
+    recent_commands_limit: int = 5
     enable_layer1: bool = True
     enable_layer2: bool = True
     enable_layer3: bool = True
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.allow_min_prob) or not (0.5 <= self.allow_min_prob <= 1.0):
+            raise ValueError(
+                f"allow_min_prob must be between 0.5 and 1.0, got {self.allow_min_prob!r}"
+            )
+        if not math.isfinite(self.deny_min_prob) or not (0.5 <= self.deny_min_prob <= 1.0):
+            raise ValueError(
+                f"deny_min_prob must be between 0.5 and 1.0, got {self.deny_min_prob!r}"
+            )
+        if not math.isfinite(self.risk_max_prob) or not (0.0 <= self.risk_max_prob <= 0.5):
+            raise ValueError(
+                f"risk_max_prob must be between 0.0 and 0.5, got {self.risk_max_prob!r}"
+            )
 
     @property
     def effective_endpoint(self) -> str:
@@ -268,6 +285,8 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         include_last_assistant=env_bool("AGY_GUARDIAN_INCLUDE_LAST_ASSISTANT", True),
         last_assistant_max_user_chars=env_int("AGY_GUARDIAN_LAST_ASSISTANT_MAX_USER_CHARS", 80),
         last_assistant_max_chars=env_int("AGY_GUARDIAN_LAST_ASSISTANT_MAX_CHARS", 500),
+        include_recent_commands=env_bool("AGY_GUARDIAN_INCLUDE_RECENT_COMMANDS", True),
+        recent_commands_limit=env_int("AGY_GUARDIAN_RECENT_COMMANDS_LIMIT", 5),
         enable_layer1=env_bool("AGY_GUARDIAN_ENABLE_LAYER1", True),
         enable_layer2=env_bool("AGY_GUARDIAN_ENABLE_LAYER2", True),
         enable_layer3=env_bool("AGY_GUARDIAN_ENABLE_LAYER3", True),

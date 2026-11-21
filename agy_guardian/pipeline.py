@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .audit import extract_recent_commands
 from .classifiers import (
     ClassificationResult,
     CompletionClassifier,
@@ -379,6 +380,14 @@ def evaluate_command(
                 )
                 if preceding:
                     case["precedingAssistantMessage"] = preceding
+        if cfg.include_recent_commands and conversation_id and cfg.recent_commands_limit > 0:
+            recent = extract_recent_commands(
+                cfg.resolved_audit_path,
+                conversation_id,
+                limit=cfg.recent_commands_limit,
+            )
+            if recent:
+                case["recentCommands"] = recent
         policy_ctx = effective_policy.to_layer3_context()
         if session_brain_dir:
             policy_ctx = dict(policy_ctx or {})

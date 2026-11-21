@@ -58,6 +58,12 @@ class TestShellParser(unittest.TestCase):
         self.assertIn("backtick", parsed.all_segments[0].opaque_reasons)
         self.assertEqual(parsed.all_segments[0].head, "iex")
 
+    def test_cmd_caret_escape_flagged_and_normalized(self) -> None:
+        parsed = parse_command(r"cmd /c r^d /s /q C:\\")
+        self.assertTrue(parsed.has_opaque)
+        self.assertIn("cmd_caret_escape", parsed.all_segments[0].opaque_reasons)
+        self.assertEqual([s.head for s in parsed.leaf_segments], ["rd"])
+
     def test_opaque_constructs_disqualify_l2(self) -> None:
         opaque_cmds = [
             "git status > C:\\Users\\dev\\Desktop\\status.txt",

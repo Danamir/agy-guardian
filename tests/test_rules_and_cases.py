@@ -102,11 +102,67 @@ class TestRulesAgainstBenchCases(unittest.TestCase):
             "cat README.md | sort -o out.txt",
             "python -v",
             "cmd /k git status",
+            # Issue #2 section 1: file writes & program execution
+            "fd -Hx calc.exe",
+            "fd -HX calc.exe",
+            r"pwd | uniq README.md C:\Users\dev\.bashrc",
+            r"pwd | sort -oC:\Users\dev\.bashrc",
+            "pwd | sort -uoout.txt",
+            "pwd | sort --compress-program=calc.exe",
+            r"pwd | cut -c1- C:\Users\dev\Documents\passwords.txt",
+            # Issue #2 section 2: rg/grep workspace escapes
+            r"rg -e password C:\Users\dev\.aws",
+            "grep -r -e BEGIN ~/.ssh",
+            r"rg --files C:\Users\dev",
+            # Issue #2 section 3: secret reads, trailing dot/space, wildcards, PS arrays, extra secret files
+            "rg . .env",
+            "grep -r API_KEY .env",
+            "Select-String -Pattern KEY -Path .env",
+            "cat .env.",
+            "cat '.env '",
+            "cat .en*",
+            "Get-Content .e?v",
+            "cat *",
+            r"Get-Content .\README.md,C:\Users\dev\Documents\passwords.txt",
+            "Get-Content README.md,.env",
+            "cat .npmrc",
+            "cat .git-credentials",
+            "cat .netrc",
+            "cat .pypirc",
+            "cat vault.kdbx",
+            "cat config/prod.env",
+            "cat .git/config",
+            # Issue #2 section 4: Git Bash backslash escapes
+            r"cat .\./.\./.\./.\./Windows/win.ini",
+            r"cat .e\nv",
+            # Issue #2 section 5: git external diff drivers
+            "git log -p --ext-diff",
+            "git diff --textconv",
         ]
         for cmd in must_not_fast_allow:
             with self.subTest(cmd=cmd):
                 parsed = parse_command(cmd)
                 self.assertIsNone(check_layer2_allow(parsed, CWD, WS), f"Bypass fast-allowed: {cmd}")
+
+    def test_safe_pipeline_filters_still_fast_allow(self) -> None:
+        safe_pipes = [
+            "cat README.md | sort -u",
+            "cat README.md | sort -r | uniq -c",
+            "cat README.md | cut -d: -f1",
+            "cat README.md | cut -c1-20",
+        ]
+        for cmd in safe_pipes:
+            with self.subTest(cmd=cmd):
+                parsed = parse_command(cmd)
+                self.assertIsNone(check_layer1_deny(parsed, CWD, WS))
+                self.assertIsNotNone(check_layer2_allow(parsed, CWD, WS), f"Should fast-allow: {cmd}")
+
+    def test_cmd_caret_escape_hits_layer1_hard_deny(self) -> None:
+        parsed = parse_command(r"cmd /c r^d /s /q C:\\")
+        l1 = check_layer1_deny(parsed, CWD, WS)
+        self.assertIsNotNone(l1)
+        self.assertEqual(l1.rule_id, "L1_CATASTROPHIC_DELETE")
+        self.assertIsNone(check_layer2_allow(parsed, CWD, WS))
 
     def test_wrapper_stripping_fast_allow_vs_hard_deny(self) -> None:
         # Benign wrapper around read-only command -> L2 allow

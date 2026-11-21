@@ -1,15 +1,111 @@
-"""Fail-closed JSONL audit logger with size-based rotation for AGY Guardian."""
+"""Fail-closed JSONL audit logger with secret redaction and locked size-based rotation."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_BACKUPS = 3
+_AUDIT_TAIL_BYTES = 64 * 1024
+
+_REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # HTTP Authorization headers (Bearer / Basic / Token)
+    (
+        re.compile(r"(Authorization\s*:\s*(?:Bearer|Basic|Token)\s+)[^\s\"']+", re.IGNORECASE),
+        r"\1[REDACTED]",
+    ),
+    # API key / private token HTTP headers
+    (
+        re.compile(
+            r"((?:x-api-key|x-goog-api-key|api-key|private-token)\s*:\s*)[^\s\"']+",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+    # URLs with embedded user:password@host credentials
+    (
+        re.compile(r"(https?://)([^/\s:@]+:[^/\s@]+)(@)", re.IGNORECASE),
+        r"\1[REDACTED]\3",
+    ),
+    # Well-known API key / PAT prefixes
+    (
+        re.compile(
+            r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{16,}\b"
+            r"|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+            r"|\bglpat-[A-Za-z0-9_-]{16,}\b"
+            r"|\bhf_[A-Za-z0-9]{16,}\b"
+            r"|\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}\b"
+            r"|\bAIza[0-9A-Za-z_-]{20,}\b"
+            r"|\bAKIA[0-9A-Z]{16}\b"
+        ),
+        "[REDACTED]",
+    ),
+    # Explicit secret env/flag assignments (KEY=value)
+    (
+        re.compile(
+            r"(\b(?:[A-Z0-9_]*(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|PASSWORD|PASSWD)"
+            r"|HF_TOKEN|GITHUB_TOKEN|GITLAB_TOKEN)\s*=\s*)(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ),
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Mask common bearer tokens, API keys, and credentials before persisting to audit logs."""
+    if not text:
+        return text
+    redacted = text
+    for pattern, repl in _REDACT_PATTERNS:
+        redacted = pattern.sub(repl, redacted)
+    return redacted
+
+
+@contextlib.contextmanager
+def _audit_file_lock(lock_path: Path, timeout_sec: float = 2.0) -> Iterator[None]:
+    """Cross-platform exclusive file lock for concurrent audit writes and rotation."""
+    fh = lock_path.open("a+b")
+    locked = False
+    try:
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            try:
+                if os.name == "nt":
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out acquiring audit lock: {lock_path}")
+                time.sleep(0.005)
+        yield
+    finally:
+        if locked:
+            try:
+                if os.name == "nt":
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fh.close()
 
 
 def build_audit_record(
@@ -39,7 +135,7 @@ def build_audit_record(
         "conversationId": conversation_id,
         "stepIdx": step_idx,
         "toolName": tool_name,
-        "commandLine": command_line,
+        "commandLine": redact_secrets(command_line),
         "cwd": cwd,
         "workspacePaths": workspace_paths,
         "layer": layer,
@@ -98,20 +194,75 @@ def write_audit_entry(
     max_bytes: int = DEFAULT_MAX_BYTES,
     backups: int = DEFAULT_BACKUPS,
 ) -> str | None:
-    """Append one JSONL audit record with optional size-based rotation.
+    """Append one JSONL audit record with locked size-based rotation.
 
     Returns None on success, or an error string on failure (never raises).
     """
     try:
+        if path.is_dir():
+            raise IsADirectoryError(f"Audit log path is a directory: {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
         line_bytes = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
-        _rotate_if_needed(path, len(line_bytes), max_bytes=max_bytes, backups=backups)
-        with path.open("ab") as fh:
-            fh.write(line_bytes)
-            fh.flush()
+        lock_path = path.with_name(f"{path.name}.lock")
+        with _audit_file_lock(lock_path):
+            _rotate_if_needed(path, len(line_bytes), max_bytes=max_bytes, backups=backups)
+            with path.open("ab") as fh:
+                fh.write(line_bytes)
+                fh.flush()
         return None
     except Exception as exc:
         return f"{type(exc).__name__}: {exc}"
+
+
+def extract_recent_commands(
+    path: Path | None,
+    conversation_id: str,
+    *,
+    limit: int = 5,
+    max_cmd_chars: int = 200,
+) -> list[str]:
+    """Read up to the last `limit` commandLines for `conversation_id` from the audit log tail.
+
+    Returns an empty list silently if the log is missing, unreadable, or has no matching entries.
+    """
+    cid = (conversation_id or "").strip()
+    if path is None or not cid or limit <= 0:
+        return []
+    try:
+        if not path.is_file():
+            return []
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > _AUDIT_TAIL_BYTES:
+                fh.seek(size - _AUDIT_TAIL_BYTES)
+                fh.readline()
+            raw_lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+
+    recent: list[str] = []
+    for line in reversed(raw_lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("conversationId") != cid:
+            continue
+        cmd = rec.get("commandLine")
+        if isinstance(cmd, str) and cmd.strip():
+            text = cmd.strip()
+            if max_cmd_chars > 0 and len(text) > max_cmd_chars:
+                text = text[:max_cmd_chars] + "...[truncated]"
+            recent.append(text)
+            if len(recent) >= limit:
+                break
+    recent.reverse()
+    return recent
 
 
 def summarize_audit_usage(path: Path, *, backups: int = DEFAULT_BACKUPS) -> dict[str, Any]:

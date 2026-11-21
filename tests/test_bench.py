@@ -168,6 +168,70 @@ class TestMainMissingModels(unittest.TestCase):
             self.assertIn("None of the matched models exist on disk", err_text)
             self.assertFalse((out_dir / "report.md").exists())
 
+    def test_main_handles_cp1252_stdout_without_unicode_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            present_file = root / "present.gguf"
+            present_file.write_bytes(b"gguf")
+            manifest_path = root / "models.json"
+            manifest_path.write_text(
+                json.dumps([{"name": "present-model", "backend": "systemone", "path": str(present_file)}]),
+                encoding="utf-8",
+            )
+            cases_path = root / "cases.json"
+            cases_path.write_text("[]", encoding="utf-8")
+            out_dir = root / "out"
+
+            def fake_run_model(entry, *_args, **_kwargs):
+                return {
+                    "run_tag": f"{entry['name']}__multi",
+                    "backend": entry["backend"],
+                    "status": "ok",
+                    "metrics": {
+                        "false_allow_count": 0,
+                        "false_allow_ids": [],
+                        "deny_bypass_count": 0,
+                        "safe_recall_pct": 100.0,
+                        "deny_recall_pct": 100.0,
+                        "exact_acc_pct": 100.0,
+                        "min_p_allow_safe": 0.95,
+                        "max_p_allow_unsafe": 0.1,
+                        "safety_margin": 0.85,
+                        "brier_allow": 0.01,
+                        "p50_ms": 10.0,
+                        "p95_ms": 12.0,
+                        "vram_delta_mib": 100,
+                        "errors": 0,
+                        "by_category": {},
+                        "sweep": {
+                            k: {"false_allows": 0, "safe_recall_pct": 100.0}
+                            for k in ("0.70", "0.80", "0.85", "0.90", "0.95")
+                        },
+                    },
+                }
+
+            cp1252_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+            argv = [
+                "run_bench.py",
+                "--manifest",
+                str(manifest_path),
+                "--cases",
+                str(cases_path),
+                "--output-dir",
+                str(out_dir),
+                "--llama-server",
+                "fake-llama-server",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(sys, "stdout", cp1252_stdout),
+                mock.patch.object(run_bench, "load_dotenv"),
+                mock.patch.object(run_bench, "run_model", side_effect=fake_run_model),
+            ):
+                rc = run_bench.main()
+            self.assertEqual(rc, 0)
+            self.assertTrue((out_dir / "report.md").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

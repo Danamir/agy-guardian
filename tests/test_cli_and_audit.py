@@ -249,6 +249,59 @@ class TestCliAndAudit(unittest.TestCase):
         self.assertEqual(rep_other.decision, "ask")
         self.assertEqual(rep_other.layer, "fail_closed")
 
+    def test_audit_log_redacts_sensitive_tokens(self) -> None:
+        from agy_guardian.audit import redact_secrets
+
+        self.assertEqual(redact_secrets("git status"), "git status")
+        self.assertNotIn(
+            "secret_bearer_123",
+            redact_secrets('curl -H "Authorization: Bearer secret_bearer_123" https://api.example.com'),
+        )
+        self.assertIn(
+            "Authorization: Bearer [REDACTED]",
+            redact_secrets('curl -H "Authorization: Bearer secret_bearer_123" https://api.example.com'),
+        )
+        self.assertNotIn(
+            "ghp_1234567890abcdef1234567890",
+            redact_secrets("git clone https://user:mypass@github.com/org/repo.git ghp_1234567890abcdef1234567890"),
+        )
+        self.assertNotIn(
+            "mysecretkey",
+            redact_secrets("OPENAI_API_KEY=mysecretkey python script.py"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "redacted.jsonl"
+            cfg = GuardianConfig(audit_log_path=str(audit_file), enable_layer3=False)
+            handle_hook_payload(
+                _hook_payload('curl -H "Authorization: Bearer super_secret_tok" https://api.example.com'),
+                cfg,
+            )
+            raw_log = audit_file.read_text(encoding="utf-8")
+            self.assertNotIn("super_secret_tok", raw_log)
+            self.assertIn("[REDACTED]", raw_log)
+
+    def test_audit_concurrent_writes_and_rotation_are_locked(self) -> None:
+        import concurrent.futures
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "concurrent.jsonl"
+            cfg = GuardianConfig(
+                audit_log_path=str(audit_file),
+                audit_fail_closed=True,
+                audit_max_bytes=1200,
+                audit_backups=2,
+            )
+
+            def _worker(i: int) -> str | None:
+                rep = handle_hook_payload(_hook_payload(f"git status # thread-{i}"), cfg)
+                return rep.audit_error
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                errors = list(pool.map(_worker, range(18)))
+            self.assertEqual([e for e in errors if e is not None], [])
+            self.assertTrue(audit_file.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

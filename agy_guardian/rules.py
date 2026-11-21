@@ -460,7 +460,10 @@ _REMOTE_DOCKER_COMPOSE_READONLY = {"ps", "logs", "config", "images", "version"}
 
 _REMOTE_SENSITIVE_PATH_RE = re.compile(
     r"(?:/etc/shadow|/etc/gshadow|/etc/sudoers|\.ssh(?:/|$)|\.aws(?:/|$)|\.gnupg(?:/|$)|"
-    r"(?:^|/)\.env(?:\.[a-z0-9_-]+)?$|\bid_rsa\b|\bid_ed25519\b|\.pem$|\.key$|credentials|secret|token)",
+    r"(?:^|/)\.env(?:\.[a-z0-9_-]+)?$|(?:^|/)[^/]+\.env$|"
+    r"(?:^|/)\.(?:npmrc|git-credentials|netrc|pypirc)$|"
+    r"(?:^|/)\.git/config$|"
+    r"\bid_rsa\b|\bid_ed25519\b|\.pem$|\.key$|\.kdbx$|credentials|secret|token)",
     re.IGNORECASE,
 )
 
@@ -543,7 +546,7 @@ def _check_remote_git_readonly(args: list[Token]) -> bool:
     sub_args = args[idx + 1 :]
     for tok in sub_args:
         low = tok.normalized
-        if low == "--output" or low.startswith("--output="):
+        if low in ("--output", "--ext-diff", "--textconv") or low.startswith("--output="):
             return False
     if sub in _GIT_READONLY_SUBCOMMANDS:
         return True
@@ -600,6 +603,9 @@ def _check_remote_segment_readonly(seg: CommandSegment) -> bool:
             base = tok.normalized.split("=", 1)[0]
             if base in ("-x", "--exec", "-X", "--exec-batch"):
                 return False
+            if tok.text.startswith("-") and not tok.text.startswith("--"):
+                if "x" in tok.text[1:] or "X" in tok.text[1:]:
+                    return False
         return True
 
     if head in ("sort", "uniq", "cut", "tr"):
@@ -807,24 +813,123 @@ _ZERO_ARG_INFO_HEADS = {
 }
 
 _SENSITIVE_FILENAME_RE = re.compile(
-    r"(?:^\.env(?:\..+)?$|\.pem$|\.key$|\.pfx$|\.p12$|^id_rsa|^id_ed25519|^credentials(?:\..+)?$|secret|token)",
+    r"(?:^\.env(?:\..+)?$|\.env$|\.pem$|\.key$|\.pfx$|\.p12$|\.kdbx$|"
+    r"^\.npmrc$|^\.git-credentials$|^\.netrc$|^\.pypirc$|"
+    r"^id_rsa|^id_ed25519|^credentials(?:\..+)?$|secret|token)",
     re.IGNORECASE,
 )
 
 
 _TEMPLATE_SUFFIXES = (".example", "-dist")
+_GLOB_CHARS = ("*", "?", "[", "]")
+_SAFE_SELECT_STRING_GLOB_EXTS = (
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java",
+    ".cs", ".c", ".cpp", ".h", ".hpp", ".md", ".rst", ".html", ".css",
+)
+
+
+def _strip_win_trailing_dots_spaces(segment: str) -> str:
+    """Windows strips trailing dots and spaces from path components."""
+    return segment.rstrip(" .")
+
+
+def _bash_unescape(text: str) -> str | None:
+    """Simulate Git Bash unquoted backslash escaping (\\X -> X). Returns None on trailing lone \\."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            if i + 1 >= n:
+                return None
+            out.append(text[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _has_glob_wildcard(text: str) -> bool:
+    return any(ch in text for ch in _GLOB_CHARS)
+
+
+def _is_safe_select_string_glob(path_str: str) -> bool:
+    """Allow only narrow source-extension globs like 'src\\*.py' in Select-String -Path."""
+    cleaned = path_str.replace("/", "\\")
+    base = ntpath.basename(cleaned)
+    parent = ntpath.dirname(cleaned)
+    if _has_glob_wildcard(parent):
+        return False
+    # Must be a simple *.ext with a known safe source extension
+    if not base.startswith("*.") or "?" in base or "[" in base or "]" in base or base.count("*") > 1:
+        return False
+    ext = base[1:].lower()
+    return ext in _SAFE_SELECT_STRING_GLOB_EXTS
 
 
 def _is_sensitive_filename(path_str: str) -> bool:
-    base = ntpath.basename(path_str.replace("/", "\\").rstrip("\\"))
-    if not base:
+    replaced = path_str.replace("/", "\\").rstrip("\\")
+    if not replaced:
         return False
-    low_full = path_str.replace("/", "\\").lower()
+    parts = [_strip_win_trailing_dots_spaces(p) for p in replaced.split("\\")]
+    norm_joined = "\\".join(parts)
+    low_full = norm_joined.lower()
     if "\\.ssh\\" in low_full or "\\.aws\\" in low_full or "\\.gnupg\\" in low_full:
         return True
+    if low_full.endswith("\\.git\\config") or low_full == ".git\\config" or low_full.endswith("\\.git\\config\\"):
+        return True
+    base = parts[-1] if parts else ""
+    if not base:
+        return False
     if base.lower().endswith(_TEMPLATE_SUFFIXES):
         return False
     return bool(_SENSITIVE_FILENAME_RE.search(base))
+
+
+def _is_safe_workspace_path(
+    tok: Token,
+    cwd: str,
+    workspace_paths: list[str],
+    *,
+    check_sensitive: bool = True,
+    allow_wildcards: bool = False,
+    allow_safe_select_string_glob: bool = False,
+) -> bool:
+    """Validate a path token under both Windows/PowerShell and Git Bash semantics."""
+    text = tok.text
+    if not text:
+        return False
+
+    # PowerShell treats unquoted commas as array separators (e.g. Get-Content README.md,.env)
+    if tok.quoted is None and "," in text:
+        return False
+
+    # Wildcards can match secret files unless explicitly allowed
+    if _has_glob_wildcard(text):
+        if allow_safe_select_string_glob and _is_safe_select_string_glob(text):
+            pass
+        elif not allow_wildcards:
+            return False
+
+    if not is_path_within_workspace(text, cwd, workspace_paths):
+        return False
+    if check_sensitive and _is_sensitive_filename(text):
+        return False
+
+    # Dual-shell check: Git Bash interprets unquoted `\` as an escape character
+    if tok.quoted is None and "\\" in text:
+        bash_path = _bash_unescape(text)
+        if bash_path is None:
+            return False
+        if check_sensitive and _is_sensitive_filename(bash_path):
+            return False
+        if "/" in bash_path or ".." in bash_path or bash_path.startswith(("~", "/")):
+            if not is_path_within_workspace(bash_path, cwd, workspace_paths):
+                return False
+
+    return True
 
 
 def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str]) -> bool:
@@ -841,7 +946,7 @@ def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str])
         if flag == "-C":
             if idx + 1 >= len(args):
                 return False
-            if not is_path_within_workspace(args[idx + 1].text, cwd, workspace_paths):
+            if not _is_safe_workspace_path(args[idx + 1], cwd, workspace_paths, check_sensitive=False):
                 return False
             idx += 2
             continue
@@ -859,10 +964,10 @@ def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str])
     sub = args[idx].normalized
     sub_args = args[idx + 1 :]
 
-    # Forbid --output / -o file writing in diff/log/show
+    # Forbid --output file writing and external diff/textconv execution in diff/log/show
     for tok in sub_args:
         low = tok.normalized
-        if low == "--output" or low.startswith("--output="):
+        if low in ("--output", "--ext-diff", "--textconv") or low.startswith("--output="):
             return False
 
     if sub in _GIT_READONLY_SUBCOMMANDS:
@@ -917,7 +1022,7 @@ def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str])
 
 
 def _check_rg_or_grep(head: str, args: list[Token], cwd: str, workspace_paths: list[str]) -> bool:
-    # Forbid arbitrary command execution flags in ripgrep
+    # Forbid arbitrary command execution flags in ripgrep/grep
     value_flags_rg = {
         "-e", "--regexp", "-f", "--file", "-g", "--glob", "--iglob",
         "-t", "--type", "-T", "--type-not", "-m", "--max-count",
@@ -926,6 +1031,8 @@ def _check_rg_or_grep(head: str, args: list[Token], cwd: str, workspace_paths: l
     }
     i = 0
     positionals: list[Token] = []
+    has_explicit_pattern = False
+    files_only_mode = False
     while i < len(args):
         tok = args[i]
         low = tok.normalized
@@ -935,7 +1042,29 @@ def _check_rg_or_grep(head: str, args: list[Token], cwd: str, workspace_paths: l
         if tok.text == "--":
             positionals.extend(args[i + 1 :])
             break
-        if tok.text.startswith("-"):
+        if tok.text.startswith("-") and len(tok.text) > 1:
+            # Block short-flag clusters containing -f (pattern file)
+            if not tok.text.startswith("--") and "f" in tok.text[1:]:
+                return False
+            if base == "--files":
+                files_only_mode = True
+                i += 1
+                continue
+            if base in ("-e", "--regexp"):
+                has_explicit_pattern = True
+                if "=" not in tok.text:
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if not tok.text.startswith("--") and "e" in tok.text[1:]:
+                has_explicit_pattern = True
+                # If `e` is the last char in a short-flag cluster (e.g. `-re`), next token is the pattern
+                if tok.text.endswith("e"):
+                    i += 2
+                else:
+                    i += 1
+                continue
             if tok.text in value_flags_rg and "=" not in tok.text:
                 i += 2
                 continue
@@ -944,10 +1073,13 @@ def _check_rg_or_grep(head: str, args: list[Token], cwd: str, workspace_paths: l
         positionals.append(tok)
         i += 1
 
-    # First positional is the pattern (unless -e was used); remaining positionals are paths
-    path_args = positionals[1:] if len(positionals) > 1 else []
+    # When -e/--regexp or --files is given, ALL positionals are paths; otherwise first positional is pattern
+    if has_explicit_pattern or files_only_mode:
+        path_args = positionals
+    else:
+        path_args = positionals[1:] if len(positionals) > 1 else []
     for p in path_args:
-        if not is_path_within_workspace(p.text, cwd, workspace_paths):
+        if not _is_safe_workspace_path(p, cwd, workspace_paths, check_sensitive=True):
             return False
     return True
 
@@ -964,14 +1096,23 @@ def _check_fd(args: list[Token], cwd: str, workspace_paths: list[str]) -> bool:
         tok = args[i]
         low = tok.normalized
         base = low.split("=", 1)[0]
-        # Forbid command execution flags in fd
+        # Forbid command execution flags in fd (including grouped short flags like -Hx, -HX)
         if base in ("-x", "--exec", "-X", "--exec-batch"):
             return False
-        if base in ("--base-directory", "--search-path"):
-            val = tok.text.split("=", 1)[1] if "=" in tok.text else (args[i + 1].text if i + 1 < len(args) else "")
-            if not is_path_within_workspace(val, cwd, workspace_paths):
+        if tok.text.startswith("-") and not tok.text.startswith("--"):
+            if "x" in tok.text[1:] or "X" in tok.text[1:]:
                 return False
-            i += 1 if "=" in tok.text else 2
+        if base in ("--base-directory", "--search-path"):
+            if "=" in tok.text:
+                val_tok = Token(text=tok.text.split("=", 1)[1], raw=tok.raw, quoted=tok.quoted)
+                i += 1
+            else:
+                if i + 1 >= len(args):
+                    return False
+                val_tok = args[i + 1]
+                i += 2
+            if not _is_safe_workspace_path(val_tok, cwd, workspace_paths, check_sensitive=True):
+                return False
             continue
         if tok.text == "--":
             positionals.extend(args[i + 1 :])
@@ -989,7 +1130,7 @@ def _check_fd(args: list[Token], cwd: str, workspace_paths: list[str]) -> bool:
     # validate any positional that looks like a path or any positional beyond the first.
     for idx, p in enumerate(positionals):
         if idx > 0 or "/" in p.text or "\\" in p.text or p.text.startswith((".", "~")) or ":" in p.text:
-            if not is_path_within_workspace(p.text, cwd, workspace_paths):
+            if not _is_safe_workspace_path(p, cwd, workspace_paths, check_sensitive=True):
                 return False
     return True
 
@@ -1003,7 +1144,13 @@ def _check_select_string(args: list[Token], cwd: str, workspace_paths: list[str]
         if low in ("-path", "-literalpath"):
             if i + 1 >= len(args):
                 return False
-            if not is_path_within_workspace(args[i + 1].text, cwd, workspace_paths):
+            if not _is_safe_workspace_path(
+                args[i + 1],
+                cwd,
+                workspace_paths,
+                check_sensitive=True,
+                allow_safe_select_string_glob=True,
+            ):
                 return False
             saw_path = True
             i += 2
@@ -1016,7 +1163,13 @@ def _check_select_string(args: list[Token], cwd: str, workspace_paths: list[str]
             continue
         # Positional argument could be pattern or path; if it looks like a path check containment
         if "/" in tok.text or "\\" in tok.text or ":" in tok.text or tok.text.startswith((".", "~")):
-            if not is_path_within_workspace(tok.text, cwd, workspace_paths):
+            if not _is_safe_workspace_path(
+                tok,
+                cwd,
+                workspace_paths,
+                check_sensitive=True,
+                allow_safe_select_string_glob=True,
+            ):
                 return False
             saw_path = True
         i += 1
@@ -1032,7 +1185,9 @@ def _check_dir_list(args: list[Token], cwd: str, workspace_paths: list[str]) -> 
         if low in ("-path", "-literalpath"):
             if i + 1 >= len(args):
                 return False
-            if not is_path_within_workspace(args[i + 1].text, cwd, workspace_paths):
+            if not _is_safe_workspace_path(
+                args[i + 1], cwd, workspace_paths, check_sensitive=False, allow_wildcards=True
+            ):
                 return False
             i += 2
             continue
@@ -1042,7 +1197,9 @@ def _check_dir_list(args: list[Token], cwd: str, workspace_paths: list[str]) -> 
         if tok.text.startswith("-"):
             i += 1
             continue
-        if not is_path_within_workspace(tok.text, cwd, workspace_paths):
+        if not _is_safe_workspace_path(
+            tok, cwd, workspace_paths, check_sensitive=False, allow_wildcards=True
+        ):
             return False
         i += 1
     return True
@@ -1053,7 +1210,7 @@ def _check_file_view(args: list[Token], cwd: str, workspace_paths: list[str], is
         "-head", "-totalcount", "-first", "-tail", "-last", "-readcount",
         "-encoding", "-delimiter", "-n", "-c", "--lines", "--bytes",
     }
-    paths: list[str] = []
+    paths: list[Token] = []
     i = 0
     while i < len(args):
         tok = args[i]
@@ -1061,7 +1218,7 @@ def _check_file_view(args: list[Token], cwd: str, workspace_paths: list[str], is
         if low in ("-path", "-literalpath"):
             if i + 1 >= len(args):
                 return False
-            paths.append(args[i + 1].text)
+            paths.append(args[i + 1])
             i += 2
             continue
         if low in value_flags and "=" not in low:
@@ -1070,15 +1227,13 @@ def _check_file_view(args: list[Token], cwd: str, workspace_paths: list[str], is
         if tok.text.startswith("-"):
             i += 1
             continue
-        paths.append(tok.text)
+        paths.append(tok)
         i += 1
 
     if not paths:
         return is_piped_in
-    for p in paths:
-        if not is_path_within_workspace(p, cwd, workspace_paths):
-            return False
-        if _is_sensitive_filename(p):
+    for p_tok in paths:
+        if not _is_safe_workspace_path(p_tok, cwd, workspace_paths, check_sensitive=True):
             return False
     return True
 
@@ -1087,11 +1242,80 @@ def _check_pipeline_filter(head: str, args: list[Token], is_piped_in: bool) -> b
     if not is_piped_in:
         return False
     if head == "sort":
-        for tok in args:
+        sort_value_flags = {
+            "-k", "--key", "-t", "--field-separator", "-S", "--buffer-size",
+            "--parallel", "--sort", "--batch-size",
+        }
+        sort_forbidden_long = {
+            "--output", "--compress-program", "--files0-from",
+            "--temporary-directory", "--random-source",
+        }
+        i = 0
+        while i < len(args):
+            tok = args[i]
             low = tok.normalized
-            if low in ("-o", "--output") or low.startswith("--output="):
+            base = low.split("=", 1)[0]
+            if base in sort_forbidden_long:
                 return False
-    # Forbid PowerShell scriptblock expressions in Select-Object / Sort-Object (already caught by opaque `{}`)
+            if tok.text == "--":
+                # Any positional file after -- is forbidden for pipeline filter
+                return i + 1 >= len(args)
+            if tok.text.startswith("-") and len(tok.text) > 1:
+                if not tok.text.startswith("--"):
+                    # Block -o, -oFILE, -uoFILE, -T, -TDIR
+                    if "o" in tok.text[1:] or "T" in tok.text[1:]:
+                        return False
+                if tok.text in sort_value_flags and "=" not in tok.text:
+                    i += 2
+                    continue
+                i += 1
+                continue
+            # Positional file argument to sort -> defer to Layer 3
+            return False
+        return True
+
+    if head == "uniq":
+        uniq_value_flags = {
+            "-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars",
+            "--group", "--all-repeated",
+        }
+        i = 0
+        while i < len(args):
+            tok = args[i]
+            if tok.text == "--":
+                return i + 1 >= len(args)
+            if tok.text.startswith("-") and len(tok.text) > 1:
+                if tok.text in uniq_value_flags and "=" not in tok.text:
+                    i += 2
+                    continue
+                i += 1
+                continue
+            # Positional INPUT/OUTPUT file arguments to uniq -> defer to Layer 3
+            return False
+        return True
+
+    if head == "cut":
+        cut_value_flags = {
+            "-b", "--bytes", "-c", "--characters", "-d", "--delimiter",
+            "-f", "--fields", "--output-delimiter",
+        }
+        i = 0
+        while i < len(args):
+            tok = args[i]
+            if tok.text == "--":
+                return i + 1 >= len(args)
+            if tok.text.startswith("-") and len(tok.text) > 1:
+                if tok.text in cut_value_flags and "=" not in tok.text:
+                    i += 2
+                    continue
+                i += 1
+                continue
+            # Positional file argument to cut -> defer to Layer 3
+            return False
+        return True
+
+    # PowerShell pipeline filters and `tr` (reads stdin only, never files)
+    # PowerShell scriptblock expressions in Select-Object / Sort-Object are already caught by opaque `{}`
     return True
 
 
