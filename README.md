@@ -16,6 +16,8 @@ Local, low-latency 3-layer `PreToolUse` command approval guardian for Google Ant
 
 ## Quick Start
 
+> **AI-assisted setup:** Point your coding agent at [`SETUP-AGENTS.md`](SETUP-AGENTS.md) (e.g., *"Follow `SETUP-AGENTS.md` to configure `agy-guardian` on this machine"*) for a guided interactive installation, `.env` setup, per-project policy interview, and verification.
+
 1. **Configure local paths:** Copy `.env.example` to `.env` (gitignored) and fill in:
    - `AGY_GUARDIAN_LLAMA_SERVER` (optional path to `llama-server`; leave blank to use `PATH`)
    - `AGY_GUARDIAN_DECISION_MODELS_DIR` (and optional `AGY_GUARDIAN_MODEL_PATH`)

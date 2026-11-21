@@ -41,6 +41,7 @@ Workspace instructions for coding agents working in this repository.
 ## Repository Layout & Workflow
 
 - `.env.example` — Tracked template for machine-local settings (copy to gitignored `.env`).
+- `SETUP-AGENTS.md` — Interactive AI-guided setup & per-project policy configuration runbook (keep separate from `AGENTS.md` to avoid bloating normal coding sessions).
 - `agy_guardian/` — Production stdlib-only 3-layer `PreToolUse` hook package:
   - `config.py` — Pure-stdlib `.env` loader, `${VAR}` expander, and `GuardianConfig`.
   - `policy.py` — Per-project policy loader (`~/.gemini/config/agy_guardian_policies.json`), fail-closed and strictly refusing in-workspace policy files.
