@@ -110,10 +110,16 @@ def _run_layer3(
 def _merge_workspace_paths(
     workspace_paths: list[str],
     policy: EffectivePolicy,
+    extra_paths: list[str] | None = None,
 ) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
-    for p in list(workspace_paths or []) + policy.extra_workspaces + policy.allowed_write_paths:
+    for p in (
+        list(workspace_paths or [])
+        + policy.extra_workspaces
+        + policy.allowed_write_paths
+        + list(extra_paths or [])
+    ):
         cleaned = (p or "").strip()
         if not cleaned:
             continue
@@ -132,6 +138,7 @@ def evaluate_command(
     config: GuardianConfig | None = None,
     classifier: Any | None = None,
     policy: EffectivePolicy | None = None,
+    conversation_id: str = "",
 ) -> DecisionReport:
     """Run the 3-layer fail-closed guardian pipeline on a proposed CommandLine."""
     t0 = time.perf_counter()
@@ -156,7 +163,12 @@ def evaluate_command(
                 env_extra_workspaces=cfg.extra_workspaces,
             )
         )
-        effective_workspaces = _merge_workspace_paths(list(workspace_paths or []), effective_policy)
+        session_brain_dir = cfg.resolve_session_brain_dir(conversation_id)
+        effective_workspaces = _merge_workspace_paths(
+            list(workspace_paths or []),
+            effective_policy,
+            extra_paths=[session_brain_dir] if session_brain_dir else None,
+        )
         policy_label = effective_policy.label
 
         parsed = parse_command(command_line)
@@ -212,6 +224,20 @@ def evaluate_command(
             "commandLine": command_line,
         }
         policy_ctx = effective_policy.to_layer3_context()
+        if session_brain_dir:
+            policy_ctx = dict(policy_ctx or {})
+            writes = list(policy_ctx.get("allowedWritePaths", []))
+            if normalize_windows_path(session_brain_dir) not in {
+                normalize_windows_path(p) for p in writes
+            }:
+                writes.append(session_brain_dir)
+            policy_ctx["allowedWritePaths"] = writes
+            brain_note = (
+                f"Current session brain directory ({session_brain_dir}) is an authorized "
+                "read/write scratch directory for this session."
+            )
+            existing_notes = str(policy_ctx.get("notes") or "").strip()
+            policy_ctx["notes"] = f"{existing_notes} {brain_note}".strip() if existing_notes else brain_note
         if policy_ctx:
             case["projectPolicy"] = policy_ctx
 

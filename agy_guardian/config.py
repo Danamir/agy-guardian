@@ -6,6 +6,7 @@ Precedence: explicit overrides / CLI flags > OS environment variables > .env > c
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
@@ -15,6 +16,8 @@ DEFAULT_AUDIT_LOG = "~/.gemini/config/agy_guardian.log.jsonl"
 DEFAULT_AUDIT_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
 DEFAULT_AUDIT_BACKUPS = 3
 DEFAULT_POLICY_FILE = "~/.gemini/config/agy_guardian_policies.json"
+DEFAULT_SESSION_BRAIN_ROOT = "~/.gemini/antigravity-cli/brain"
+_SAFE_CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$")
 
 
 def load_dotenv(env_path: Path | str | None = None) -> dict[str, str]:
@@ -100,6 +103,8 @@ class GuardianConfig:
     audit_backups: int = DEFAULT_AUDIT_BACKUPS
     policy_file: str = DEFAULT_POLICY_FILE
     extra_workspaces: list[str] = field(default_factory=list)
+    allow_session_brain: bool = True
+    session_brain_root: str = DEFAULT_SESSION_BRAIN_ROOT
     enable_layer1: bool = True
     enable_layer2: bool = True
     enable_layer3: bool = True
@@ -131,6 +136,22 @@ class GuardianConfig:
         if not self.policy_enabled:
             return None
         return expand_path(self.policy_file)
+
+    def resolve_session_brain_dir(self, conversation_id: str) -> str | None:
+        """Resolve the current session's brain directory strictly scoped to conversation_id."""
+        if not self.allow_session_brain:
+            return None
+        cid = (conversation_id or "").strip()
+        if not cid or not _SAFE_CONVERSATION_ID_RE.fullmatch(cid):
+            return None
+        raw_root = (self.session_brain_root or "").strip()
+        if not raw_root or raw_root.lower() in ("off", "none", "false", "0"):
+            return None
+        root = expand_path(raw_root)
+        candidate = root / cid
+        if candidate.parent != root:
+            return None
+        return str(candidate)
 
 
 def load_config(env_path: Path | str | None = None) -> GuardianConfig:
@@ -173,6 +194,8 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         audit_backups=env_int("AGY_GUARDIAN_AUDIT_BACKUPS", DEFAULT_AUDIT_BACKUPS),
         policy_file=policy_file,
         extra_workspaces=extra_workspaces,
+        allow_session_brain=env_bool("AGY_GUARDIAN_ALLOW_SESSION_BRAIN", True),
+        session_brain_root=env_str("AGY_GUARDIAN_SESSION_BRAIN_ROOT", DEFAULT_SESSION_BRAIN_ROOT),
         enable_layer1=env_bool("AGY_GUARDIAN_ENABLE_LAYER1", True),
         enable_layer2=env_bool("AGY_GUARDIAN_ENABLE_LAYER2", True),
         enable_layer3=env_bool("AGY_GUARDIAN_ENABLE_LAYER3", True),

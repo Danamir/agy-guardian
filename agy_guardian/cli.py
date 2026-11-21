@@ -139,6 +139,7 @@ def handle_hook_payload(raw_stdin: str, config: GuardianConfig) -> DecisionRepor
             workspace_paths=workspace_paths,
             last_user_input=last_user_input,
             config=config,
+            conversation_id=conversation_id,
         )
 
     return _finalize_with_audit(
@@ -185,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             help="Workspace path(s) for --check (defaults to --cwd)",
         )
         parser.add_argument("--user-input", default="", help="Simulated lastUserInput for --check")
+        parser.add_argument("--conversation-id", default="", help="Optional conversationId for --check (enables session brain dir)")
         parser.add_argument("--backend", choices=("systemone", "completion", "auto"), default="")
         parser.add_argument("--endpoint", default="", help="Override llama-server endpoint URL")
         parser.add_argument("--policy", default="", help="Override per-project policy JSON path (or 'off')")
@@ -215,11 +217,12 @@ def main(argv: list[str] | None = None) -> int:
                 workspace_paths=ws,
                 last_user_input=args.user_input,
                 config=config,
+                conversation_id=args.conversation_id,
             )
             report = _finalize_with_audit(
                 report,
                 config=config,
-                conversation_id="cli-check",
+                conversation_id=args.conversation_id or "cli-check",
                 step_idx=None,
                 tool_name="run_command",
                 command_line=args.check,

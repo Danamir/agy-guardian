@@ -221,6 +221,30 @@ class TestCliAndAudit(unittest.TestCase):
             out = json.loads(raw_out)
             self.assertEqual(out["decision"], "ask")
 
+    def test_hook_payload_allows_current_session_brain_dir_only(self) -> None:
+        brain_root = r"C:\Users\dev\.gemini\antigravity-cli\brain"
+        cfg = GuardianConfig(
+            audit_log_path="off",
+            policy_file="off",
+            allow_session_brain=True,
+            session_brain_root=brain_root,
+            enable_layer3=False,
+        )
+        # _hook_payload uses conversationId="conv-test-001"
+        rep_own = handle_hook_payload(
+            _hook_payload(rf"Get-Content {brain_root}\conv-test-001\scratch\plan.md"),
+            cfg,
+        )
+        self.assertEqual(rep_own.decision, "allow")
+        self.assertEqual(rep_own.layer, "L2_allow")
+
+        rep_other = handle_hook_payload(
+            _hook_payload(rf"Get-Content {brain_root}\other-conv-999\scratch\plan.md"),
+            cfg,
+        )
+        self.assertEqual(rep_other.decision, "ask")
+        self.assertEqual(rep_other.layer, "fail_closed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -192,6 +192,103 @@ class TestClassifiersAndPipeline(unittest.TestCase):
                 false_allows.append(c["id"])
         self.assertEqual(false_allows, [])
 
+    def test_session_brain_dir_strictly_scoped_to_conversation_id(self) -> None:
+        brain_root = r"C:\Users\dev\.gemini\antigravity-cli\brain"
+        cid = "833ebcb1-aec1-4523-9637-c90900c2faaa"
+        other_cid = "11111111-2222-3333-4444-555555555555"
+        expected_brain = rf"{brain_root}\{cid}"
+
+        cfg = GuardianConfig(
+            audit_log_path="off",
+            policy_file="off",
+            allow_session_brain=True,
+            session_brain_root=brain_root,
+        )
+
+        # Invalid/traversal conversation IDs are strictly rejected
+        for bad_cid in ("", "short", "../config", r"..\config", "a/b/cdef1234", "conv with space"):
+            self.assertIsNone(cfg.resolve_session_brain_dir(bad_cid))
+        self.assertEqual(cfg.resolve_session_brain_dir(cid), expected_brain)
+
+        # Layer 2 fast-allows read-only access inside the CURRENT session brain dir
+        with patch("agy_guardian.classifiers._post_json") as mock_post:
+            rep = evaluate_command(
+                rf"Get-Content {expected_brain}\scratch\notes.md",
+                CWD,
+                WS,
+                "read scratch notes",
+                cfg,
+                conversation_id=cid,
+            )
+            self.assertEqual(rep.decision, "allow")
+            self.assertEqual(rep.layer, "L2_allow")
+            mock_post.assert_not_called()
+
+        # Layer 2 must NOT fast-allow another session's brain dir or ~/.gemini/config
+        for forbidden_cmd in (
+            rf"Get-Content {brain_root}\{other_cid}\scratch\notes.md",
+            r"Get-Content C:\Users\dev\.gemini\config\hooks.json",
+        ):
+            with patch(
+                "agy_guardian.classifiers._post_json",
+                return_value=(_make_systemone_response(0.10, 0.85, 0.05, out=0.80), 20.0),
+            ) as mock_post:
+                rep = evaluate_command(
+                    forbidden_cmd,
+                    CWD,
+                    WS,
+                    "read file",
+                    cfg,
+                    conversation_id=cid,
+                )
+                self.assertEqual(rep.decision, "ask")
+                self.assertEqual(rep.layer, "L3_systemone")
+                mock_post.assert_called_once()
+
+        # Layer 3 receives the session brain dir in workspacePaths and projectPolicy.allowedWritePaths
+        captured_cases: list[dict] = []
+
+        class CaptureClassifier:
+            def classify(self, case: dict) -> ClassificationResult:
+                captured_cases.append(case)
+                return ClassificationResult(decision="allow", probs={"allow": 0.96, "ask": 0.03, "deny": 0.01})
+
+        rep_write = evaluate_command(
+            rf"python {expected_brain}\scratch\gen.py",
+            CWD,
+            WS,
+            "run scratch helper",
+            cfg,
+            classifier=CaptureClassifier(),
+            conversation_id=cid,
+        )
+        self.assertEqual(rep_write.decision, "allow")
+        self.assertEqual(len(captured_cases), 1)
+        self.assertIn(expected_brain, captured_cases[0]["workspacePaths"])
+        self.assertIn(expected_brain, captured_cases[0]["projectPolicy"]["allowedWritePaths"])
+        self.assertIn(expected_brain, captured_cases[0]["projectPolicy"]["notes"])
+
+        # Disabling allow_session_brain prevents the session brain dir from being added
+        cfg_off = GuardianConfig(
+            audit_log_path="off",
+            policy_file="off",
+            allow_session_brain=False,
+            session_brain_root=brain_root,
+        )
+        self.assertIsNone(cfg_off.resolve_session_brain_dir(cid))
+        captured_cases.clear()
+        evaluate_command(
+            rf"Get-Content {expected_brain}\scratch\notes.md",
+            CWD,
+            WS,
+            "read scratch notes",
+            cfg_off,
+            classifier=CaptureClassifier(),
+            conversation_id=cid,
+        )
+        self.assertEqual(len(captured_cases), 1)
+        self.assertNotIn(expected_brain, captured_cases[0]["workspacePaths"])
+
 
 if __name__ == "__main__":
     unittest.main()
