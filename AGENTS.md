@@ -32,8 +32,9 @@ Target 3-layer architecture:
 - **Local settings pattern (`.env.example` + `.env`):**
   - Keep all machine-specific settings (`AGY_GUARDIAN_LLAMA_SERVER`, model directories, host/port, thresholds) in a gitignored `.env` file copied from the tracked `.env.example`.
   - Follow standard precedence: `CLI flags > OS env vars > .env > code defaults`, using pure-stdlib loading (`bench/env.py`, zero third-party deps).
-  - Never commit personal usernames, hostnames, local drive paths, API keys, or benchmark outputs.
-  - Keep local notes, custom model manifests, and benchmark outputs under `.local/` (gitignored).
+  - Never commit personal usernames, hostnames, local drive paths, API keys, or raw server/JSONL logs.
+  - Keep local notes, custom model manifests, and raw benchmark artifacts (`*.jsonl`, `*.server.log`) under `.local/` (gitignored).
+  - Curated, privacy-clean benchmark reports and sanitized summary JSONs belong in `bench/RESULTS.md` and `bench/results/`.
   - Use placeholder paths (e.g. `C:\Users\dev\workspace\my-app`) in tracked test cases and `${AGY_GUARDIAN_*_DIR}` placeholders in `bench/models.example.json`.
 - **Secrets:** Never print, echo, or log environment secrets such as `HF_TOKEN`.
 
@@ -41,10 +42,11 @@ Target 3-layer architecture:
 
 - `.env.example` — Tracked template for machine-local settings (copy to gitignored `.env`).
 - `bench/env.py` — Pure-stdlib `.env` loader and `${VAR}` path expander.
-- `bench/cases.json` — Labeled CLI safety test cases across `safe_read`, `safe_dev`, `ask_risky`, `deny_catastrophic`, and `adversarial_injection`.
+- `bench/cases.json` — Labeled CLI safety test cases across `safe_read`, `safe_dev`, `hard_safe`, `ask_risky`, `hard_ask`, `deny_catastrophic`, `hard_deny`, `adversarial_injection`, and `hard_adversarial`.
 - `bench/classifiers.py` — Pure-stdlib HTTP clients for `POST /v1/systemone` and `POST /v1/chat/completions`, plus fail-closed `apply_thresholds()`.
-- `bench/run_bench.py` — Automated runner launching `llama-server`, measuring VRAM/latency/calibration, and writing reports to `.local/benchmark_results/`.
+- `bench/run_bench.py` — Automated runner launching `llama-server`, measuring VRAM/latency/calibration, and writing raw runs to `.local/benchmark_results/`.
 - `bench/models.example.json` — Portable template manifest using `${AGY_GUARDIAN_*_DIR}` placeholders (copy to `.local/models.json`).
+- `bench/RESULTS.md` & `bench/results/` — Tracked, privacy-clean benchmark reports and sanitized summary JSONs.
 
 Run benchmarks locally (reading `AGY_GUARDIAN_*` from `.env`):
 ```powershell

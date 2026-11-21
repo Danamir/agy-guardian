@@ -26,4 +26,4 @@ python bench/run_bench.py
 python bench/run_bench.py --model clef-flash --schema both
 ```
 
-Reports and per-case JSONL outputs are written to `.local/benchmark_results/` (gitignored).
+Raw per-case JSONL outputs and server logs are written to `.local/benchmark_results/` (gitignored). See [`bench/RESULTS.md`](bench/RESULTS.md) for the latest curated benchmark results across 86 test cases.
