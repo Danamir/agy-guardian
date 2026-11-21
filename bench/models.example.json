@@ -1,0 +1,32 @@
+[
+  {
+    "name": "clef-flash-q5_k_m",
+    "backend": "systemone",
+    "path": "${AGY_GUARDIAN_DECISION_MODELS_DIR}/Cloudflare_clef-flash-Q5_K_M.gguf",
+    "extra_args": ["--ctx-size", "2048", "-b", "2048", "-ub", "2048", "-np", "1"]
+  },
+  {
+    "name": "fastbrain-9b-q4_k_m",
+    "backend": "systemone",
+    "path": "${AGY_GUARDIAN_DECISION_MODELS_DIR}/FastBrain-9B.Q4_K_M.gguf",
+    "extra_args": ["--ctx-size", "2048", "-b", "2048", "-ub", "2048", "-np", "1"]
+  },
+  {
+    "name": "kev-4b-q4_k_m",
+    "backend": "systemone",
+    "path": "${AGY_GUARDIAN_DECISION_MODELS_DIR}/Kev-4B-Q4_K_M.gguf",
+    "extra_args": ["--ctx-size", "2048", "-b", "2048", "-ub", "2048", "-np", "1"]
+  },
+  {
+    "name": "laya-base-q8_0",
+    "backend": "systemone",
+    "path": "${AGY_GUARDIAN_DECISION_MODELS_DIR}/Laya-Q8_0.gguf",
+    "extra_args": ["--ctx-size", "512", "-np", "1"]
+  },
+  {
+    "name": "gemma-4-e4b-completion-baseline",
+    "backend": "completion",
+    "path": "${AGY_GUARDIAN_LLM_MODELS_DIR}/gemma-4-E4B-it-UD-Q4_K_XL-unsloth.gguf",
+    "extra_args": ["--ctx-size", "2048", "-np", "1"]
+  }
+]
