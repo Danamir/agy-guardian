@@ -234,7 +234,8 @@ def evaluate_command(
             policy_ctx["allowedWritePaths"] = writes
             brain_note = (
                 f"Current session brain directory ({session_brain_dir}) is an authorized "
-                "read/write scratch directory for this session."
+                "read/write workspace for this session; reading, writing, and running local "
+                "helper/scratch scripts inside it is allowed."
             )
             existing_notes = str(policy_ctx.get("notes") or "").strip()
             policy_ctx["notes"] = f"{existing_notes} {brain_note}".strip() if existing_notes else brain_note
