@@ -1,0 +1,29 @@
+{
+  "defaults": {
+    "extraWorkspaces": [],
+    "allowedWritePaths": [],
+    "allowedSshReadHosts": [],
+    "policyNotes": ""
+  },
+  "projects": [
+    {
+      "name": "my-project",
+      "matchWorkspaces": [
+        "C:\\Users\\dev\\workspace\\my-project"
+      ],
+      "extraWorkspaces": [
+        "C:\\Users\\dev\\workspace\\my-project-companion",
+        "\\\\wsl.localhost\\Ubuntu\\home\\dev\\workspace\\deploy-scripts"
+      ],
+      "allowedWritePaths": [
+        "C:\\Users\\dev\\workspace\\my-project-companion",
+        "\\\\wsl.localhost\\Ubuntu\\home\\dev\\workspace\\deploy-scripts"
+      ],
+      "allowedSshReadHosts": [
+        "staging-01",
+        "prod-ro.internal"
+      ],
+      "policyNotes": "Read-only ssh inspection on staging-01 and prod-ro.internal is allowed; remote writes, service restarts, and deployment playbooks still require ask."
+    }
+  ]
+}

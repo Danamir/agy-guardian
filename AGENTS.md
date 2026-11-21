@@ -43,17 +43,18 @@ Workspace instructions for coding agents working in this repository.
 - `.env.example` — Tracked template for machine-local settings (copy to gitignored `.env`).
 - `agy_guardian/` — Production stdlib-only 3-layer `PreToolUse` hook package:
   - `config.py` — Pure-stdlib `.env` loader, `${VAR}` expander, and `GuardianConfig`.
-  - `shell_parser.py` — PowerShell/Bash lexical splitter, backtick normalizer, wrapper stripper, opaque detector, and workspace path containment checker.
-  - `rules.py` — Layer 1 deterministic hard-deny and Layer 2 deterministic fast-allow evaluators.
+  - `policy.py` — Per-project policy loader (`~/.gemini/config/agy_guardian_policies.json`), fail-closed and strictly refusing in-workspace policy files.
+  - `shell_parser.py` — PowerShell/Bash lexical splitter, backtick normalizer, wrapper stripper, opaque detector, and Windows/WSL UNC workspace path containment checker.
+  - `rules.py` — Layer 1 deterministic hard-deny (including SSH remote commands) and Layer 2 deterministic fast-allow (including policy-scoped read-only SSH) evaluators.
   - `classifiers.py` — Pure-stdlib HTTP clients for `POST /v1/systemone` and `POST /v1/chat/completions`, plus fail-closed `apply_thresholds()`.
-  - `pipeline.py` — 3-layer evaluation orchestrator with optional `/v1/chat/completions` fallback.
+  - `pipeline.py` — 3-layer evaluation orchestrator with per-project policy resolution and optional `/v1/chat/completions` fallback.
   - `audit.py` — Fail-closed JSONL audit logger.
-  - `cli.py` & `__main__.py` — Antigravity `PreToolUse` stdin/stdout entrypoint and diagnostic CLI (`--check`, `--health`).
+  - `cli.py` & `__main__.py` — Antigravity `PreToolUse` stdin/stdout entrypoint and diagnostic CLI (`--check`, `--policy`, `--health`).
 - `scripts/` — Operational scripts:
   - `agy_guardian_hook.py` — Direct hook launcher (zero `PYTHONPATH` setup needed under `cmd /c`).
   - `start_llama_server.ps1` — Idempotent `llama-server` startup/status/stop script (`--ctx-size 2048 -b 2048 -ub 2048 -np 1`).
   - `install_hooks.ps1` — Safe JSON merger for `%USERPROFILE%\.gemini\config\hooks.json`.
-- `config/hooks.example.json` — Tracked portable Antigravity `hooks.json` template.
+- `config/` — Tracked portable templates (`hooks.example.json`, `policies.example.json`).
 - `tests/` — Stdlib `unittest` suite covering parser, all 86 `bench/cases.json` cases, mocked Layer 3/fallbacks, and hook CLI/audit contract.
 - `bench/` — Benchmark suite (`cases.json`, `run_bench.py`, `RESULTS.md`, `results/`, and compatibility shims `env.py`/`classifiers.py`).
 

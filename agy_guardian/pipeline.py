@@ -13,8 +13,9 @@ from .classifiers import (
     Thresholds,
 )
 from .config import GuardianConfig
+from .policy import EffectivePolicy, load_effective_policy
 from .rules import check_layer1_deny, check_layer2_allow
-from .shell_parser import parse_command
+from .shell_parser import normalize_windows_path, parse_command
 
 
 @dataclass
@@ -28,6 +29,8 @@ class DecisionReport:
     latency_ms: float = 0.0
     error: str | None = None
     audit_error: str | None = None
+    policy_name: str | None = None
+    policy_error: str | None = None
 
 
 def _format_l3_reason(backend_label: str, res: ClassificationResult) -> str:
@@ -104,6 +107,23 @@ def _run_layer3(
     return "L3_systemone", res
 
 
+def _merge_workspace_paths(
+    workspace_paths: list[str],
+    policy: EffectivePolicy,
+) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for p in list(workspace_paths or []) + policy.extra_workspaces + policy.allowed_write_paths:
+        cleaned = (p or "").strip()
+        if not cleaned:
+            continue
+        norm = normalize_windows_path(cleaned)
+        if norm not in seen:
+            seen.add(norm)
+            merged.append(cleaned)
+    return merged
+
+
 def evaluate_command(
     command_line: str,
     cwd: str,
@@ -111,6 +131,7 @@ def evaluate_command(
     last_user_input: str = "",
     config: GuardianConfig | None = None,
     classifier: Any | None = None,
+    policy: EffectivePolicy | None = None,
 ) -> DecisionReport:
     """Run the 3-layer fail-closed guardian pipeline on a proposed CommandLine."""
     t0 = time.perf_counter()
@@ -125,11 +146,24 @@ def evaluate_command(
                 latency_ms=(time.perf_counter() - t0) * 1000.0,
             )
 
+        effective_policy = (
+            policy
+            if policy is not None
+            else load_effective_policy(
+                policy_path=cfg.resolved_policy_path,
+                cwd=cwd,
+                workspace_paths=list(workspace_paths or []),
+                env_extra_workspaces=cfg.extra_workspaces,
+            )
+        )
+        effective_workspaces = _merge_workspace_paths(list(workspace_paths or []), effective_policy)
+        policy_label = effective_policy.label
+
         parsed = parse_command(command_line)
 
-        # Layer 1: Deterministic Hard-Deny (0 ms)
+        # Layer 1: Deterministic Hard-Deny (0 ms, non-overridable by project policy)
         if cfg.enable_layer1:
-            l1 = check_layer1_deny(parsed, cwd, workspace_paths)
+            l1 = check_layer1_deny(parsed, cwd, effective_workspaces)
             if l1 is not None:
                 return DecisionReport(
                     decision="deny",
@@ -137,11 +171,18 @@ def evaluate_command(
                     layer="L1_deny",
                     rule_id=l1.rule_id,
                     latency_ms=(time.perf_counter() - t0) * 1000.0,
+                    policy_name=policy_label,
+                    policy_error=effective_policy.error,
                 )
 
         # Layer 2: Deterministic Fast-Allow (0 ms)
         if cfg.enable_layer2:
-            l2 = check_layer2_allow(parsed, cwd, workspace_paths)
+            l2 = check_layer2_allow(
+                parsed,
+                cwd,
+                effective_workspaces,
+                allowed_ssh_read_hosts=effective_policy.allowed_ssh_read_hosts,
+            )
             if l2 is not None:
                 return DecisionReport(
                     decision="allow",
@@ -149,6 +190,8 @@ def evaluate_command(
                     layer="L2_allow",
                     rule_id=l2.rule_id,
                     latency_ms=(time.perf_counter() - t0) * 1000.0,
+                    policy_name=policy_label,
+                    policy_error=effective_policy.error,
                 )
 
         # Layer 3: Local Decision Model Classifier
@@ -158,14 +201,20 @@ def evaluate_command(
                 reason="Deferred past Layer 1/2 with Layer 3 disabled — failing closed to ask",
                 layer="fail_closed",
                 latency_ms=(time.perf_counter() - t0) * 1000.0,
+                policy_name=policy_label,
+                policy_error=effective_policy.error,
             )
 
-        case = {
-            "workspacePaths": list(workspace_paths or []),
+        case: dict[str, Any] = {
+            "workspacePaths": effective_workspaces,
             "cwd": cwd or "",
             "lastUserInput": last_user_input or "",
             "commandLine": command_line,
         }
+        policy_ctx = effective_policy.to_layer3_context()
+        if policy_ctx:
+            case["projectPolicy"] = policy_ctx
+
         layer_tag, res = _run_layer3(case, cfg, classifier=classifier)
         decision = res.decision if res.decision in ("allow", "ask", "deny") else "ask"
         backend_label = (
@@ -181,6 +230,8 @@ def evaluate_command(
             risk_probs=res.risk_probs,
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             error=res.error,
+            policy_name=policy_label,
+            policy_error=effective_policy.error,
         )
     except Exception as exc:
         return DecisionReport(

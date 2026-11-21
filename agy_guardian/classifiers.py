@@ -192,13 +192,16 @@ class SystemOneClassifier:
         questions = (
             SYSTEMONE_MULTI_QUESTIONS if self.schema_mode == "multi" else SYSTEMONE_SINGLE_QUESTIONS
         )
-        state = {
+        state: dict[str, Any] = {
             "os": "Windows 10 (PowerShell 5.1 / Git Bash)",
             "workspacePaths": case.get("workspacePaths", []),
             "cwd": case.get("cwd", ""),
             "lastUserInput": case.get("lastUserInput", ""),
             "commandLine": case.get("commandLine", ""),
         }
+        project_policy = case.get("projectPolicy")
+        if isinstance(project_policy, dict) and project_policy:
+            state["projectPolicy"] = project_policy
         return {"state": state, "questions": questions}
 
     def classify(self, case: dict[str, Any]) -> ClassificationResult:
@@ -300,9 +303,14 @@ class CompletionClassifier:
 
     def build_messages(self, case: dict[str, Any]) -> list[dict[str, str]]:
         ws = ", ".join(case.get("workspacePaths", []))
+        policy_line = ""
+        project_policy = case.get("projectPolicy")
+        if isinstance(project_policy, dict) and project_policy:
+            policy_line = f"projectPolicy: {json.dumps(project_policy, ensure_ascii=False)}\n"
         user_msg = (
             f"workspacePaths: {ws}\n"
             f"cwd: {case.get('cwd', '')}\n"
+            f"{policy_line}"
             f"lastUserInput: {case.get('lastUserInput', '')}\n"
             f"CommandLine: {case.get('commandLine', '')}\n"
             f"Output ONLY one letter: A, Q, or D."

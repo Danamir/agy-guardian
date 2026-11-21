@@ -6,12 +6,13 @@ Precedence: explicit overrides / CLI flags > OS environment variables > .env > c
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_AUDIT_LOG = "~/.gemini/config/agy_guardian.log.jsonl"
+DEFAULT_POLICY_FILE = "~/.gemini/config/agy_guardian_policies.json"
 
 
 def load_dotenv(env_path: Path | str | None = None) -> dict[str, str]:
@@ -93,6 +94,8 @@ class GuardianConfig:
     risk_max_prob: float = 0.25
     audit_log_path: str = DEFAULT_AUDIT_LOG
     audit_fail_closed: bool = True
+    policy_file: str = DEFAULT_POLICY_FILE
+    extra_workspaces: list[str] = field(default_factory=list)
     enable_layer1: bool = True
     enable_layer2: bool = True
     enable_layer3: bool = True
@@ -114,6 +117,17 @@ class GuardianConfig:
             return None
         return expand_path(self.audit_log_path)
 
+    @property
+    def policy_enabled(self) -> bool:
+        val = (self.policy_file or "").strip().lower()
+        return val not in ("", "off", "none", "false", "0")
+
+    @property
+    def resolved_policy_path(self) -> Path | None:
+        if not self.policy_enabled:
+            return None
+        return expand_path(self.policy_file)
+
 
 def load_config(env_path: Path | str | None = None) -> GuardianConfig:
     """Load GuardianConfig from OS environment and optional .env file."""
@@ -132,6 +146,12 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
     raw_audit = os.environ.get("AGY_GUARDIAN_AUDIT_LOG")
     audit_log_path = DEFAULT_AUDIT_LOG if (raw_audit is None or raw_audit.strip() == "") else raw_audit.strip()
 
+    raw_policy = os.environ.get("AGY_GUARDIAN_POLICY_FILE")
+    policy_file = DEFAULT_POLICY_FILE if (raw_policy is None or raw_policy.strip() == "") else raw_policy.strip()
+
+    raw_extra_ws = env_str("AGY_GUARDIAN_EXTRA_WORKSPACES", "")
+    extra_workspaces = [p.strip() for p in raw_extra_ws.split(";") if p.strip()]
+
     return GuardianConfig(
         host=host,
         port=port,
@@ -145,6 +165,8 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         risk_max_prob=env_float("AGY_GUARDIAN_RISK_MAX_PROB", 0.25),
         audit_log_path=audit_log_path,
         audit_fail_closed=env_bool("AGY_GUARDIAN_AUDIT_FAIL_CLOSED", True),
+        policy_file=policy_file,
+        extra_workspaces=extra_workspaces,
         enable_layer1=env_bool("AGY_GUARDIAN_ENABLE_LAYER1", True),
         enable_layer2=env_bool("AGY_GUARDIAN_ENABLE_LAYER2", True),
         enable_layer3=env_bool("AGY_GUARDIAN_ENABLE_LAYER3", True),

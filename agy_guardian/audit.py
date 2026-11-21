@@ -24,6 +24,8 @@ def build_audit_record(
     risk_probs: dict[str, float] | None = None,
     latency_ms: float = 0.0,
     error: str | None = None,
+    policy_name: str | None = None,
+    policy_error: str | None = None,
 ) -> dict[str, Any]:
     return {
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -41,6 +43,8 @@ def build_audit_record(
         "riskProbs": risk_probs or {},
         "latencyMs": round(latency_ms, 2),
         "error": error,
+        "policyName": policy_name,
+        "policyError": policy_error,
     }
 
 

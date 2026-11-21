@@ -12,6 +12,7 @@ from .shell_parser import (
     Token,
     is_path_within_workspace,
     normalize_windows_path,
+    parse_command,
 )
 
 
@@ -402,6 +403,259 @@ def _check_pipelines_layer1(parsed: ParsedCommand) -> RuleMatch | None:
     return None
 
 
+_SSH_SAFE_BOOL_FLAGS = {"-n", "-t", "-q", "-4", "-6", "-v"}
+_SSH_SAFE_VALUE_FLAGS = {"-p", "-l"}
+_SSH_FORBIDDEN_FLAGS = {
+    "-o", "-f", "-n", "-a", "-x", "-y", "-l", "-r", "-d", "-w", "-j", "-s", "-m", "-e", "-i",
+}
+_SSH_VALUE_FLAGS_FOR_L1 = {
+    "-b", "-c", "-d", "-e", "-f", "-i", "-j", "-l", "-m", "-o", "-p", "-q", "-r", "-s", "-w",
+}
+
+_REMOTE_READONLY_SIMPLE_HEADS = {
+    "ls",
+    "ll",
+    "pwd",
+    "whoami",
+    "id",
+    "uname",
+    "hostname",
+    "uptime",
+    "date",
+    "df",
+    "du",
+    "free",
+    "ps",
+    "ss",
+    "netstat",
+    "lscpu",
+    "lsblk",
+    "stat",
+    "file",
+    "readlink",
+    "realpath",
+}
+
+_REMOTE_FILE_VIEW_HEADS = {"cat", "head", "tail", "wc"}
+_REMOTE_SYSTEMCTL_READONLY_SUBS = {
+    "status",
+    "is-active",
+    "is-enabled",
+    "is-failed",
+    "list-units",
+    "list-unit-files",
+    "list-timers",
+    "show",
+    "cat",
+}
+_REMOTE_JOURNALCTL_FORBIDDEN = {
+    "--flush",
+    "--rotate",
+    "--sync",
+    "--relinquish-var",
+    "--update-catalog",
+}
+_REMOTE_DOCKER_SIMPLE_READONLY = {"ps", "images", "logs", "inspect", "info", "version"}
+_REMOTE_DOCKER_COMPOSE_READONLY = {"ps", "logs", "config", "images", "version"}
+
+_REMOTE_SENSITIVE_PATH_RE = re.compile(
+    r"(?:/etc/shadow|/etc/gshadow|/etc/sudoers|\.ssh(?:/|$)|\.aws(?:/|$)|\.gnupg(?:/|$)|"
+    r"(?:^|/)\.env(?:\.[a-z0-9_-]+)?$|\bid_rsa\b|\bid_ed25519\b|\.pem$|\.key$|credentials|secret|token)",
+    re.IGNORECASE,
+)
+
+
+def _extract_ssh_target_and_command(
+    args: list[Token],
+    *,
+    strict_for_l2: bool,
+) -> tuple[str | None, str | None]:
+    """Extract (host, remote_command) from ssh args. In strict mode, reject risky SSH options."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        raw = tok.text
+        if raw == "--":
+            i += 1
+            break
+        if raw.startswith("-") and len(raw) > 1:
+            if strict_for_l2:
+                # Allow only explicitly safe non-forwarding, non-ProxyCommand flags
+                if raw in ("-n", "-T", "-q", "-4", "-6", "-v"):
+                    i += 1
+                    continue
+                if raw in ("-p", "-l"):
+                    if i + 1 >= len(args):
+                        return None, None
+                    i += 2
+                    continue
+                return None, None
+            else:
+                low = raw.lower()
+                if len(raw) == 2 and low in _SSH_VALUE_FLAGS_FOR_L1:
+                    i += 2
+                    continue
+                i += 1
+                continue
+        break
+
+    if i >= len(args):
+        return None, None
+
+    target = args[i].text.strip()
+    if not target:
+        return None, None
+    host = target.rsplit("@", 1)[-1].lower()
+
+    rest = args[i + 1 :]
+    if not rest:
+        return host, None
+
+    remote_cmd = rest[0].text if len(rest) == 1 else " ".join(t.raw for t in rest)
+    return host, remote_cmd
+
+
+def _is_remote_sensitive_arg(arg: str) -> bool:
+    return bool(_REMOTE_SENSITIVE_PATH_RE.search(arg.strip().strip('"').strip("'")))
+
+
+def _check_remote_git_readonly(args: list[Token]) -> bool:
+    if not args:
+        return False
+    idx = 0
+    while idx < len(args) and args[idx].text.startswith("-"):
+        flag = args[idx].text
+        low = flag.lower()
+        if flag == "-C":
+            if idx + 1 >= len(args):
+                return False
+            idx += 2
+            continue
+        if flag == "-c" or any(low == f or low.startswith(f + "=") for f in _GIT_FORBIDDEN_GLOBAL_FLAGS):
+            return False
+        if low in ("--no-pager", "-p", "--paginate", "--no-optional-locks"):
+            idx += 1
+            continue
+        return False
+    if idx >= len(args):
+        return False
+    sub = args[idx].normalized
+    sub_args = args[idx + 1 :]
+    for tok in sub_args:
+        low = tok.normalized
+        if low == "--output" or low.startswith("--output="):
+            return False
+    if sub in _GIT_READONLY_SUBCOMMANDS:
+        return True
+    if sub == "branch":
+        return all(t.normalized.split("=", 1)[0] in _GIT_BRANCH_READONLY_FLAGS for t in sub_args)
+    if sub == "tag":
+        if not sub_args:
+            return True
+        has_list = False
+        i = 0
+        while i < len(sub_args):
+            base = sub_args[i].normalized.split("=", 1)[0]
+            if base in ("-l", "--list"):
+                has_list = True
+                i += 1
+                if i < len(sub_args) and not sub_args[i].text.startswith("-"):
+                    i += 1
+                continue
+            if base in _GIT_TAG_READONLY_FLAGS:
+                i += 1
+                continue
+            return False
+        return has_list
+    return False
+
+
+def _check_remote_segment_readonly(seg: CommandSegment) -> bool:
+    if seg.opaque_reasons or not seg.tokens:
+        return False
+    head = seg.head
+    args = seg.args
+    is_piped_in = seg.operator_before == "|"
+
+    if head in _REMOTE_READONLY_SIMPLE_HEADS:
+        return not any(_is_remote_sensitive_arg(t.text) for t in args if not t.text.startswith("-"))
+
+    if head in _REMOTE_FILE_VIEW_HEADS:
+        paths = [t.text for t in args if not t.text.startswith("-")]
+        if not paths:
+            return is_piped_in
+        return not any(_is_remote_sensitive_arg(p) for p in paths)
+
+    if head in ("grep", "egrep", "fgrep", "rg"):
+        for tok in args:
+            base = tok.normalized.split("=", 1)[0]
+            if base in ("--pre", "--pre-glob", "--files-from", "-f", "--file"):
+                return False
+            if not tok.text.startswith("-") and _is_remote_sensitive_arg(tok.text):
+                return False
+        return True
+
+    if head == "fd":
+        for tok in args:
+            base = tok.normalized.split("=", 1)[0]
+            if base in ("-x", "--exec", "-X", "--exec-batch"):
+                return False
+        return True
+
+    if head in ("sort", "uniq", "cut", "tr"):
+        return _check_pipeline_filter(head, args, is_piped_in)
+
+    if head == "systemctl":
+        pos = [t.normalized for t in args if not t.text.startswith("-")]
+        return bool(pos) and pos[0] in _REMOTE_SYSTEMCTL_READONLY_SUBS
+
+    if head == "journalctl":
+        for tok in args:
+            base = tok.normalized.split("=", 1)[0]
+            if base in _REMOTE_JOURNALCTL_FORBIDDEN or base.startswith("--vacuum"):
+                return False
+        return True
+
+    if head == "docker":
+        pos = [t.normalized for t in args if not t.text.startswith("-")]
+        if not pos:
+            return False
+        sub = pos[0]
+        if sub in _REMOTE_DOCKER_SIMPLE_READONLY:
+            return True
+        if sub == "stats":
+            return any(t.normalized == "--no-stream" for t in args)
+        if sub in ("network", "volume"):
+            return len(pos) >= 2 and pos[1] in ("ls", "list", "inspect")
+        if sub == "compose":
+            return len(pos) >= 2 and pos[1] in _REMOTE_DOCKER_COMPOSE_READONLY
+        return False
+
+    if head == "git":
+        return _check_remote_git_readonly(args)
+
+    return False
+
+
+def _check_ssh_readonly_segment(
+    seg: CommandSegment,
+    allowed_ssh_read_hosts: set[str],
+) -> bool:
+    if not allowed_ssh_read_hosts or seg.head != "ssh" or seg.opaque_reasons:
+        return False
+    host, remote_cmd = _extract_ssh_target_and_command(seg.args, strict_for_l2=True)
+    if not host or not remote_cmd or host not in allowed_ssh_read_hosts:
+        return False
+
+    remote_parsed = parse_command(remote_cmd)
+    if remote_parsed.has_opaque or not remote_parsed.leaf_segments:
+        return False
+    # Never allow anything Layer 1 would deny remotely
+    if check_layer1_deny(remote_parsed, "/", []) is not None:
+        return False
+    return all(_check_remote_segment_readonly(rseg) for rseg in remote_parsed.leaf_segments)
+
+
 def check_layer1_deny(
     parsed: ParsedCommand,
     cwd: str,
@@ -412,6 +666,17 @@ def check_layer1_deny(
         match = _check_segment_layer1(seg, cwd, workspace_paths)
         if match is not None:
             return match
+        if seg.head == "ssh":
+            _, remote_cmd = _extract_ssh_target_and_command(seg.args, strict_for_l2=False)
+            if remote_cmd:
+                remote_parsed = parse_command(remote_cmd)
+                remote_match = check_layer1_deny(remote_parsed, "/", [])
+                if remote_match is not None:
+                    return RuleMatch(
+                        decision="deny",
+                        rule_id=remote_match.rule_id,
+                        reason=f"{remote_match.reason} (via ssh remote command)",
+                    )
 
     return _check_pipelines_layer1(parsed)
 
@@ -568,10 +833,6 @@ def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str])
     while idx < len(args) and args[idx].text.startswith("-"):
         flag = args[idx].text
         low = flag.lower()
-        if any(low == f or low.startswith(f + "=") for f in _GIT_FORBIDDEN_GLOBAL_FLAGS):
-            return False
-        if low == "-c":
-            return False
         if flag == "-C":
             if idx + 1 >= len(args):
                 return False
@@ -579,6 +840,8 @@ def _check_git_readonly(args: list[Token], cwd: str, workspace_paths: list[str])
                 return False
             idx += 2
             continue
+        if flag == "-c" or any(low == f or low.startswith(f + "=") for f in _GIT_FORBIDDEN_GLOBAL_FLAGS):
+            return False
         if low in ("--no-pager", "-p", "--paginate", "--bare", "--no-optional-locks"):
             idx += 1
             continue
@@ -827,13 +1090,21 @@ def _check_pipeline_filter(head: str, args: list[Token], is_piped_in: bool) -> b
     return True
 
 
-def _check_segment_layer2(seg: CommandSegment, cwd: str, workspace_paths: list[str]) -> bool:
+def _check_segment_layer2(
+    seg: CommandSegment,
+    cwd: str,
+    workspace_paths: list[str],
+    allowed_ssh_read_hosts: set[str],
+) -> bool:
     if seg.opaque_reasons or not seg.tokens:
         return False
 
     head = seg.head
     args = seg.args
     is_piped_in = seg.operator_before == "|"
+
+    if head == "ssh" and allowed_ssh_read_hosts:
+        return _check_ssh_readonly_segment(seg, allowed_ssh_read_hosts)
 
     if head in _ZERO_ARG_INFO_HEADS and not args:
         return True
@@ -878,6 +1149,7 @@ def check_layer2_allow(
     parsed: ParsedCommand,
     cwd: str,
     workspace_paths: list[str],
+    allowed_ssh_read_hosts: set[str] | list[str] | None = None,
 ) -> RuleMatch | None:
     """Evaluate Layer 2 deterministic fast-allow rules (zero opaque constructs, all segments read-only)."""
     if parsed.has_opaque or not parsed.leaf_segments:
@@ -887,13 +1159,20 @@ def check_layer2_allow(
     if not is_path_within_workspace(cwd, cwd, workspace_paths):
         return None
 
+    ssh_hosts = {h.strip().lower() for h in (allowed_ssh_read_hosts or []) if h and h.strip()}
+
     for seg in parsed.leaf_segments:
-        if not _check_segment_layer2(seg, cwd, workspace_paths):
+        if not _check_segment_layer2(seg, cwd, workspace_paths, ssh_hosts):
             return None
 
     heads = ", ".join(seg.head for seg in parsed.leaf_segments)
+    has_ssh = any(seg.head == "ssh" for seg in parsed.leaf_segments)
     return RuleMatch(
         decision="allow",
-        rule_id="L2_FAST_ALLOW_READONLY",
-        reason=f"Layer 2 fast-allow: verified read-only workspace command ({heads})",
+        rule_id="L2_FAST_ALLOW_SSH_READONLY" if has_ssh else "L2_FAST_ALLOW_READONLY",
+        reason=(
+            f"Layer 2 fast-allow: verified policy-allowed read-only ssh command ({heads})"
+            if has_ssh
+            else f"Layer 2 fast-allow: verified read-only workspace command ({heads})"
+        ),
     )

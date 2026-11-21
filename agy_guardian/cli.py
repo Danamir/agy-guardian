@@ -51,6 +51,8 @@ def _finalize_with_audit(
         risk_probs=report.risk_probs,
         latency_ms=report.latency_ms,
         error=report.error,
+        policy_name=report.policy_name,
+        policy_error=report.policy_error,
     )
     err = write_audit_entry(audit_path, record)
     if err is not None:
@@ -163,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--user-input", default="", help="Simulated lastUserInput for --check")
         parser.add_argument("--backend", choices=("systemone", "completion", "auto"), default="")
         parser.add_argument("--endpoint", default="", help="Override llama-server endpoint URL")
+        parser.add_argument("--policy", default="", help="Override per-project policy JSON path (or 'off')")
         parser.add_argument("--no-audit", action="store_true", help="Disable JSONL audit log for this invocation")
         parser.add_argument("--json", action="store_true", help="Emit full DecisionReport JSON for --check")
         parser.add_argument("--health", action="store_true", help="Check llama-server /health and exit")
@@ -172,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
             config.backend = args.backend
         if args.endpoint:
             config.endpoint = args.endpoint.rstrip("/")
+        if args.policy:
+            config.policy_file = args.policy
         if args.no_audit:
             config.audit_log_path = "off"
 
@@ -210,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
                             "probs": report.probs,
                             "riskProbs": report.risk_probs,
                             "latencyMs": round(report.latency_ms, 2),
+                            "policyName": report.policy_name,
+                            "policyError": report.policy_error,
                             "error": report.error,
                             "auditError": report.audit_error,
                         },
@@ -218,7 +225,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             else:
-                print(f"[{report.decision.upper()}] ({report.layer}, {report.latency_ms:.1f} ms) {report.reason}")
+                pol_str = f", policy={report.policy_name}" if report.policy_name else ""
+                print(
+                    f"[{report.decision.upper()}] ({report.layer}{pol_str}, {report.latency_ms:.1f} ms) {report.reason}"
+                )
             return 0
 
         # If flags like --no-audit or --backend were passed without --check, still run hook stdin mode

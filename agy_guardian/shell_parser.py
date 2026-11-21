@@ -11,6 +11,7 @@ MAX_UNWRAP_DEPTH = 4
 _PS_PROVIDER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]+:(?![\\/])")
 _PS_DRIVE_PROVIDER_RE = re.compile(r"^[A-Za-z]{2,}:")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_WSL_UNC_RE = re.compile(r"^(?:\\\\|//)(?:wsl\.localhost|wsl\$)[\\/][^\\/]+(?:[\\/].*)?$", re.IGNORECASE)
 _ENV_PERCENT_RE = re.compile(r"%[A-Za-z_][A-Za-z0-9_]*%")
 _VAR_DOLLAR_RE = re.compile(r"\$(?:[A-Za-z_?*$@]|\{)")
 _TIMEOUT_NUM_RE = re.compile(r"^\d+(?:\.\d+)?[smhd]?$", re.IGNORECASE)
@@ -548,8 +549,13 @@ def parse_command(command: str, _depth: int = 0, _unwrapped_from: tuple[str, ...
     return result
 
 
+def is_wsl_unc_path(path_str: str) -> bool:
+    """Return True if path_str is a Windows WSL UNC path (\\\\wsl.localhost\\... or \\\\wsl$\\...)."""
+    return bool(_WSL_UNC_RE.match(path_str.strip()))
+
+
 def normalize_windows_path(path_str: str) -> str:
-    """Normalize a Windows path case-insensitively with backslash separators."""
+    """Normalize a Windows or WSL UNC path case-insensitively with backslash separators."""
     replaced = path_str.replace("/", "\\")
     return ntpath.normcase(ntpath.normpath(replaced))
 
@@ -567,14 +573,19 @@ def is_path_within_workspace(
     if not cleaned:
         return False
 
-    # Reject home shortcuts, env expansions, UNC paths, POSIX root paths, and PS providers (Env:, HKLM:, etc.)
-    if cleaned.startswith(("~", "$", "%", "\\\\", "//", "/")):
+    # Reject home shortcuts, env expansions, POSIX root paths, and PS providers (Env:, HKLM:, etc.)
+    if cleaned.startswith(("~", "$", "%")):
         return False
-    if _PS_DRIVE_PROVIDER_RE.match(cleaned) or _PS_PROVIDER_RE.match(cleaned):
+    if cleaned.startswith(("\\\\", "//")):
+        # Allow UNC paths ONLY for explicit WSL UNC roots; block arbitrary network shares (\\host\share)
+        if not is_wsl_unc_path(cleaned):
+            return False
+        resolved = normalize_windows_path(cleaned)
+    elif cleaned.startswith("/"):
         return False
-
-    # Resolve relative paths against cwd
-    if _WINDOWS_DRIVE_RE.match(cleaned):
+    elif _PS_DRIVE_PROVIDER_RE.match(cleaned) or _PS_PROVIDER_RE.match(cleaned):
+        return False
+    elif _WINDOWS_DRIVE_RE.match(cleaned):
         resolved = normalize_windows_path(cleaned)
     else:
         if not cwd:
@@ -584,7 +595,10 @@ def is_path_within_workspace(
     for ws in workspace_paths:
         if not ws:
             continue
-        ws_norm = normalize_windows_path(ws)
+        ws_clean = ws.strip().strip('"').strip("'")
+        if ws_clean.startswith(("\\\\", "//")) and not is_wsl_unc_path(ws_clean):
+            continue
+        ws_norm = normalize_windows_path(ws_clean)
         if resolved == ws_norm:
             return True
         prefix = ws_norm if ws_norm.endswith("\\") else ws_norm + "\\"

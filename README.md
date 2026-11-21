@@ -45,6 +45,17 @@ Local, low-latency 3-layer `PreToolUse` command approval guardian for Google Ant
 
 Settings precedence: `CLI flags > OS env vars > .env > code defaults`.
 
+## Per-Project Policies (Optional)
+
+To grant project-scoped access to companion repos, WSL UNC directories (`\\wsl.localhost\...` / `\\wsl$\...`), write folders, or read-only `ssh` hosts without storing trust rules inside writable workspaces:
+
+1. Copy [`config/policies.example.json`](config/policies.example.json) to `%USERPROFILE%\.gemini\config\agy_guardian_policies.json` (or set `AGY_GUARDIAN_POLICY_FILE` in `.env`).
+2. Add entries under `"projects"` keyed by `"matchWorkspaces"`:
+   - `extraWorkspaces` / `allowedWritePaths`: merged into workspace scope for Layer 1/2/3 when working inside that project.
+   - `allowedSshReadHosts`: enables Layer 2 deterministic fast-allow for strictly read-only remote commands (`ls`, `cat` non-sensitive, `systemctl status`, `journalctl`, `docker ps/logs`, `git status/diff/log`, etc.) on those hosts while blocking dangerous SSH flags and mutating remote commands.
+   - `policyNotes`: passed as structured `projectPolicy` context to Layer 3 (`Clef-Flash`).
+3. **Security boundary:** Layer 1 hard-deny is never overridable, and `agy_guardian` refuses to load any policy file stored inside `workspacePaths`.
+
 ## Testing & Benchmarking
 
 ```powershell
