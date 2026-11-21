@@ -22,8 +22,9 @@ def _run() -> int:
             json.dumps(
                 {
                     "decision": "ask",
-                    "reason": f"agy-guardian bootstrap error ({type(exc).__name__}) — failing closed to ask",
-                }
+                    "reason": f"agy-guardian bootstrap error ({type(exc).__name__}) - failing closed to ask",
+                },
+                ensure_ascii=True,
             )
             + "\n"
         )

@@ -17,8 +17,16 @@ from .pipeline import DecisionReport, evaluate_command
 def _emit_hook_response(decision: str, reason: str) -> None:
     safe_decision = decision if decision in ("allow", "ask", "force_ask", "deny") else "ask"
     payload = {"decision": safe_decision, "reason": reason}
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    # Always emit pure 7-bit ASCII JSON (\uXXXX escapes) so Windows cmd/cp850/cp1252
+    # pipes never raise UnicodeEncodeError or emit invalid UTF-8 bytes to Antigravity.
+    sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
+
+
+def _read_stdin_utf8() -> str:
+    if hasattr(sys.stdin, "buffer"):
+        return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    return sys.stdin.read()
 
 
 def _finalize_with_audit(
@@ -148,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # Fast-path hook mode (zero argparse overhead when called directly by Antigravity)
         if not args_list:
-            raw_stdin = sys.stdin.read()
+            raw_stdin = _read_stdin_utf8()
             report = handle_hook_payload(raw_stdin, config)
             _emit_hook_response(report.decision, report.reason)
             return 0
@@ -232,12 +240,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         # If flags like --no-audit or --backend were passed without --check, still run hook stdin mode
-        raw_stdin = sys.stdin.read()
+        raw_stdin = _read_stdin_utf8()
         report = handle_hook_payload(raw_stdin, config)
         _emit_hook_response(report.decision, report.reason)
         return 0
     except Exception as exc:
-        _emit_hook_response("ask", f"agy-guardian internal error ({type(exc).__name__}) — failing closed to ask")
+        _emit_hook_response("ask", f"agy-guardian internal error ({type(exc).__name__}) - failing closed to ask")
         return 0
 
 

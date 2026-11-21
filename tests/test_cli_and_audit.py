@@ -138,6 +138,47 @@ class TestCliAndAudit(unittest.TestCase):
             # Audit log captured all 3 invocations
             self.assertEqual(len(audit_file.read_text(encoding="utf-8").splitlines()), 3)
 
+    def test_subprocess_hook_handles_non_ascii_under_cp850_stdout(self) -> None:
+        """Simulate Windows cmd /c legacy codepage (cp850) with UTF-8 stdin & non-ASCII errors."""
+        with tempfile.TemporaryDirectory() as tmp:
+            audit_file = Path(tmp) / "cp850_audit.jsonl"
+            env = os.environ.copy()
+            env["AGY_GUARDIAN_AUDIT_LOG"] = str(audit_file)
+            env["AGY_GUARDIAN_PORT"] = "18999"
+            env["PYTHONIOENCODING"] = "cp850"
+            env.pop("PYTHONUTF8", None)
+
+            payload_utf8 = json.dumps(
+                {
+                    "conversationId": "conv-cp850",
+                    "workspacePaths": WS,
+                    "cwd": CWD,
+                    "lastUserInput": "Vérifier l’état — café",
+                    "hookEventName": "PreToolUse",
+                    "stepIdx": 1,
+                    "toolCall": {
+                        "id": "toolu_02",
+                        "name": "run_command",
+                        "args": {"CommandLine": "pytest -q"},
+                    },
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+            proc = subprocess.run(
+                [sys.executable, str(HOOK_SCRIPT)],
+                input=payload_utf8,
+                capture_output=True,
+                env=env,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", errors="replace"))
+            # Stdout must be strictly valid ASCII/UTF-8 JSON
+            raw_out = proc.stdout.decode("ascii")
+            out = json.loads(raw_out)
+            self.assertEqual(out["decision"], "ask")
+
 
 if __name__ == "__main__":
     unittest.main()
