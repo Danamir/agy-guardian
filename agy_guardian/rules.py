@@ -812,6 +812,9 @@ _SENSITIVE_FILENAME_RE = re.compile(
 )
 
 
+_TEMPLATE_SUFFIXES = (".example", "-dist")
+
+
 def _is_sensitive_filename(path_str: str) -> bool:
     base = ntpath.basename(path_str.replace("/", "\\").rstrip("\\"))
     if not base:
@@ -819,6 +822,8 @@ def _is_sensitive_filename(path_str: str) -> bool:
     low_full = path_str.replace("/", "\\").lower()
     if "\\.ssh\\" in low_full or "\\.aws\\" in low_full or "\\.gnupg\\" in low_full:
         return True
+    if base.lower().endswith(_TEMPLATE_SUFFIXES):
+        return False
     return bool(_SENSITIVE_FILENAME_RE.search(base))
 
 

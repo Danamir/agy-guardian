@@ -354,6 +354,29 @@ class TestClassifiersAndPipeline(unittest.TestCase):
             # Missing transcript returns None cleanly
             self.assertIsNone(extract_preceding_assistant_message(str(Path(tmp) / "nonexistent")))
 
+    def test_template_files_example_and_dist_allowed_while_env_stays_sensitive(self) -> None:
+        cfg = GuardianConfig(audit_log_path="off", policy_file="off", enable_layer3=False)
+
+        # Templates ending in .example or -dist are fast-allowed by Layer 2 inside workspace
+        for cmd in (
+            "Get-Content .env.example",
+            "Get-Content config.ini-dist",
+            "Get-Content properties-dist",
+        ):
+            rep = evaluate_command(cmd, CWD, WS, "read template", cfg)
+            self.assertEqual(rep.decision, "allow", cmd)
+            self.assertEqual(rep.layer, "L2_allow", cmd)
+
+        # Real .env and .env.local must NOT be fast-allowed by Layer 2
+        for cmd in (
+            "Get-Content .env",
+            "Get-Content .env.local",
+            "Get-Content .env.production",
+        ):
+            rep = evaluate_command(cmd, CWD, WS, "read env", cfg)
+            self.assertEqual(rep.decision, "ask", cmd)
+            self.assertNotEqual(rep.layer, "L2_allow", cmd)
+
 
 if __name__ == "__main__":
     unittest.main()
