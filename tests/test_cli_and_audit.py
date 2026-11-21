@@ -90,6 +90,8 @@ class TestCliAndAudit(unittest.TestCase):
             audit_file = Path(tmp) / "hook_audit.jsonl"
             env = os.environ.copy()
             env["AGY_GUARDIAN_AUDIT_LOG"] = str(audit_file)
+            env["AGY_GUARDIAN_BACKEND"] = "systemone"
+            env["AGY_GUARDIAN_FALLBACK_BACKEND"] = "none"
             env["AGY_GUARDIAN_PORT"] = "18999"  # Unreachable port for offline L3 fail-closed test
 
             # 1. L2 fast-allow emits wire decision "auto_approve" via subprocess stdin/stdout
@@ -186,6 +188,8 @@ class TestCliAndAudit(unittest.TestCase):
             audit_file = Path(tmp) / "cp850_audit.jsonl"
             env = os.environ.copy()
             env["AGY_GUARDIAN_AUDIT_LOG"] = str(audit_file)
+            env["AGY_GUARDIAN_BACKEND"] = "systemone"
+            env["AGY_GUARDIAN_FALLBACK_BACKEND"] = "none"
             env["AGY_GUARDIAN_PORT"] = "18999"
             env["PYTHONIOENCODING"] = "cp850"
             env.pop("PYTHONUTF8", None)

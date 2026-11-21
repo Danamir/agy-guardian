@@ -210,6 +210,9 @@ class SystemOneClassifier:
             "lastUserInput": case.get("lastUserInput", ""),
             "commandLine": case.get("commandLine", ""),
         }
+        preceding_assistant = case.get("precedingAssistantMessage")
+        if isinstance(preceding_assistant, str) and preceding_assistant.strip():
+            state["precedingAssistantMessage"] = preceding_assistant.strip()
         project_policy = case.get("projectPolicy")
         if isinstance(project_policy, dict) and project_policy:
             state["projectPolicy"] = project_policy
@@ -318,10 +321,15 @@ class CompletionClassifier:
         project_policy = case.get("projectPolicy")
         if isinstance(project_policy, dict) and project_policy:
             policy_line = f"projectPolicy: {json.dumps(project_policy, ensure_ascii=False)}\n"
+        assistant_line = ""
+        preceding_assistant = case.get("precedingAssistantMessage")
+        if isinstance(preceding_assistant, str) and preceding_assistant.strip():
+            assistant_line = f"precedingAssistantMessage: {preceding_assistant.strip()}\n"
         user_msg = (
             f"workspacePaths: {ws}\n"
             f"cwd: {case.get('cwd', '')}\n"
             f"{policy_line}"
+            f"{assistant_line}"
             f"lastUserInput: {case.get('lastUserInput', '')}\n"
             f"CommandLine: {case.get('commandLine', '')}\n"
             f"Output ONLY one letter: A, Q, or D."
@@ -483,6 +491,9 @@ class GeminiDecisionClassifier:
             "lastUserInput": last_user_input,
             "commandLine": case.get("commandLine", ""),
         }
+        preceding_assistant = case.get("precedingAssistantMessage")
+        if isinstance(preceding_assistant, str) and preceding_assistant.strip():
+            state["precedingAssistantMessage"] = preceding_assistant.strip()
         project_policy = case.get("projectPolicy")
         if isinstance(project_policy, dict) and project_policy:
             state["projectPolicy"] = project_policy

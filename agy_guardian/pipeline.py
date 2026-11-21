@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .classifiers import (
@@ -198,6 +200,60 @@ def _run_layer3(
     return primary_layer, res
 
 
+_TRANSCRIPT_TAIL_BYTES = 64 * 1024  # Read at most the last 64 KiB of transcript.jsonl
+
+
+def extract_preceding_assistant_message(
+    session_brain_dir: str | None,
+    *,
+    max_chars: int = 500,
+) -> str | None:
+    """Read the last user-facing assistant message preceding the latest USER_INPUT in transcript.jsonl.
+
+    Returns None silently if the transcript is missing, unreadable, or has no preceding assistant message.
+    """
+    if not session_brain_dir or max_chars <= 0:
+        return None
+    transcript = Path(session_brain_dir) / ".system_generated" / "logs" / "transcript.jsonl"
+    try:
+        if not transcript.is_file():
+            return None
+        size = transcript.stat().st_size
+        with transcript.open("rb") as fh:
+            if size > _TRANSCRIPT_TAIL_BYTES:
+                fh.seek(size - _TRANSCRIPT_TAIL_BYTES)
+                # Drop potentially partial first line after seeking into the middle of the file
+                fh.readline()
+            raw_lines = fh.read().decode("utf-8", errors="replace").splitlines()
+    except Exception:
+        return None
+
+    seen_user_input = False
+    for line in reversed(raw_lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        etype = entry.get("type")
+        if not seen_user_input:
+            if etype == "USER_INPUT":
+                seen_user_input = True
+            continue
+        if etype == "PLANNER_RESPONSE":
+            content = entry.get("content")
+            if isinstance(content, str) and content.strip():
+                text = content.strip()
+                if len(text) > max_chars:
+                    return "...[truncated] " + text[-max_chars:]
+                return text
+    return None
+
+
 def _merge_workspace_paths(
     workspace_paths: list[str],
     policy: EffectivePolicy,
@@ -314,6 +370,15 @@ def evaluate_command(
             "lastUserInput": last_user_input or "",
             "commandLine": command_line,
         }
+        if cfg.include_last_assistant and session_brain_dir:
+            user_len = len((last_user_input or "").strip())
+            if cfg.last_assistant_max_user_chars <= 0 or user_len <= cfg.last_assistant_max_user_chars:
+                preceding = extract_preceding_assistant_message(
+                    session_brain_dir,
+                    max_chars=cfg.last_assistant_max_chars,
+                )
+                if preceding:
+                    case["precedingAssistantMessage"] = preceding
         policy_ctx = effective_policy.to_layer3_context()
         if session_brain_dir:
             policy_ctx = dict(policy_ctx or {})

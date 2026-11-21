@@ -131,6 +131,9 @@ class GuardianConfig:
     extra_workspaces: list[str] = field(default_factory=list)
     allow_session_brain: bool = True
     session_brain_root: str = DEFAULT_SESSION_BRAIN_ROOT
+    include_last_assistant: bool = True
+    last_assistant_max_user_chars: int = 80
+    last_assistant_max_chars: int = 500
     enable_layer1: bool = True
     enable_layer2: bool = True
     enable_layer3: bool = True
@@ -262,6 +265,9 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         extra_workspaces=extra_workspaces,
         allow_session_brain=env_bool("AGY_GUARDIAN_ALLOW_SESSION_BRAIN", True),
         session_brain_root=env_str("AGY_GUARDIAN_SESSION_BRAIN_ROOT", DEFAULT_SESSION_BRAIN_ROOT),
+        include_last_assistant=env_bool("AGY_GUARDIAN_INCLUDE_LAST_ASSISTANT", True),
+        last_assistant_max_user_chars=env_int("AGY_GUARDIAN_LAST_ASSISTANT_MAX_USER_CHARS", 80),
+        last_assistant_max_chars=env_int("AGY_GUARDIAN_LAST_ASSISTANT_MAX_CHARS", 500),
         enable_layer1=env_bool("AGY_GUARDIAN_ENABLE_LAYER1", True),
         enable_layer2=env_bool("AGY_GUARDIAN_ENABLE_LAYER2", True),
         enable_layer3=env_bool("AGY_GUARDIAN_ENABLE_LAYER3", True),

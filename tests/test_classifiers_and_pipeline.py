@@ -17,7 +17,7 @@ from agy_guardian.classifiers import (
     apply_thresholds,
 )
 from agy_guardian.config import GuardianConfig
-from agy_guardian.pipeline import evaluate_command
+from agy_guardian.pipeline import evaluate_command, extract_preceding_assistant_message
 
 CWD = r"C:\Users\dev\workspace\my-app"
 WS = [r"C:\Users\dev\workspace\my-app"]
@@ -288,6 +288,71 @@ class TestClassifiersAndPipeline(unittest.TestCase):
         )
         self.assertEqual(len(captured_cases), 1)
         self.assertNotIn(expected_brain, captured_cases[0]["workspacePaths"])
+
+    def test_preceding_assistant_message_extracted_for_short_replies(self) -> None:
+        import tempfile
+
+        cid = "833ebcb1-aec1-4523-9637-c90900c2faaa"
+        with tempfile.TemporaryDirectory() as tmp:
+            brain_dir = Path(tmp) / cid
+            log_dir = brain_dir / ".system_generated" / "logs"
+            log_dir.mkdir(parents=True)
+            transcript = log_dir / "transcript.jsonl"
+            long_intro = "A" * 600
+            question = "Would you like me to commit these changes and close GitLab Issue #1?"
+            entries = [
+                {"type": "USER_INPUT", "content": "<USER_REQUEST>\nEarlier turn\n</USER_REQUEST>"},
+                {"type": "PLANNER_RESPONSE", "content": f"{long_intro}\n{question}"},
+                {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "run_command"}]},
+                {"type": "USER_INPUT", "content": "<USER_REQUEST>\nYes\n</USER_REQUEST>"},
+                {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "run_command"}]},
+            ]
+            transcript.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+            # Tail truncation keeps the end (where the question is)
+            extracted = extract_preceding_assistant_message(str(brain_dir), max_chars=120)
+            self.assertIsNotNone(extracted)
+            self.assertTrue((extracted or "").startswith("...[truncated] "))
+            self.assertIn(question, extracted or "")
+
+            captured: list[dict] = []
+
+            class CaptureClassifier:
+                def classify(self, case: dict) -> ClassificationResult:
+                    captured.append(case)
+                    return ClassificationResult(decision="allow", probs={"allow": 0.96, "ask": 0.03, "deny": 0.01})
+
+            cfg = GuardianConfig(
+                audit_log_path="off",
+                policy_file="off",
+                allow_session_brain=True,
+                session_brain_root=tmp,
+                include_last_assistant=True,
+                last_assistant_max_user_chars=80,
+                last_assistant_max_chars=200,
+            )
+
+            # Short reply "Yes" attaches precedingAssistantMessage
+            evaluate_command("pytest -q", CWD, WS, "Yes", cfg, classifier=CaptureClassifier(), conversation_id=cid)
+            self.assertEqual(len(captured), 1)
+            self.assertIn(question, captured[0].get("precedingAssistantMessage", ""))
+
+            # Long self-contained reply (>80 chars) skips transcript lookup
+            captured.clear()
+            long_user = "Please run the full unit test suite across the repository and report any failures in detail."
+            evaluate_command("pytest -q", CWD, WS, long_user, cfg, classifier=CaptureClassifier(), conversation_id=cid)
+            self.assertEqual(len(captured), 1)
+            self.assertNotIn("precedingAssistantMessage", captured[0])
+
+            # Disabled flag skips transcript lookup even for "Yes"
+            captured.clear()
+            cfg.include_last_assistant = False
+            evaluate_command("pytest -q", CWD, WS, "Yes", cfg, classifier=CaptureClassifier(), conversation_id=cid)
+            self.assertEqual(len(captured), 1)
+            self.assertNotIn("precedingAssistantMessage", captured[0])
+
+            # Missing transcript returns None cleanly
+            self.assertIsNone(extract_preceding_assistant_message(str(Path(tmp) / "nonexistent")))
 
 
 if __name__ == "__main__":
