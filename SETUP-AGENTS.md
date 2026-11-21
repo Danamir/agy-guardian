@@ -55,10 +55,15 @@ Write `.env` using native file tools (never echo secrets to the terminal).
    ```
    All tests must pass before wiring the live hook.
 
-2. Ask the user if they want to start `llama-server` now:
+2. Ask the user if they want to start `llama-server` now (PowerShell or Git Bash — both share `.local/llama-server.pid`):
    ```powershell
+   # PowerShell:
    .\scripts\start_llama_server.ps1 -Background
    .\scripts\start_llama_server.ps1 -Status
+   # Git Bash:
+   ./scripts/start_llama_server.sh
+   ./scripts/start_llama_server.sh status
+   # Health check:
    python scripts/agy_guardian_hook.py --health
    ```
    *(Reminder: `start_llama_server.ps1` automatically passes the required Decision Model flags `--ctx-size 2048 -b 2048 -ub 2048 -np 1` to avoid `HTTP 500` on payloads >512 tokens.)*

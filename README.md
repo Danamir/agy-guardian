@@ -23,12 +23,18 @@ Local, low-latency 3-layer `PreToolUse` command approval guardian for Google Ant
    - `AGY_GUARDIAN_DECISION_MODELS_DIR` (and optional `AGY_GUARDIAN_MODEL_PATH`)
 
 2. **Start the local `llama-server` sidecar:**
-   ```powershell
-   .\scripts\start_llama_server.ps1 -Background
-   .\scripts\start_llama_server.ps1 -Status
-   # Stop when finished:
-   .\scripts\start_llama_server.ps1 -Stop
-   ```
+   - **Git Bash:**
+     ```bash
+     ./scripts/start_llama_server.sh              # starts in background
+     ./scripts/start_llama_server.sh status
+     ./scripts/start_llama_server.sh stop
+     ```
+   - **PowerShell:**
+     ```powershell
+     .\scripts\start_llama_server.ps1 -Background
+     .\scripts\start_llama_server.ps1 -Status
+     .\scripts\start_llama_server.ps1 -Stop
+     ```
 
 3. **Test the hook CLI locally:**
    ```powershell

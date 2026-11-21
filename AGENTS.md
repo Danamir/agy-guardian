@@ -53,7 +53,7 @@ Workspace instructions for coding agents working in this repository.
   - `cli.py` & `__main__.py` — Antigravity `PreToolUse` stdin/stdout entrypoint and diagnostic CLI (`--check`, `--policy`, `--health`).
 - `scripts/` — Operational scripts:
   - `agy_guardian_hook.py` — Direct hook launcher (zero `PYTHONPATH` setup needed under `cmd /c`).
-  - `start_llama_server.ps1` — Idempotent `llama-server` startup/status/stop script (`--ctx-size 2048 -b 2048 -ub 2048 -np 1`).
+  - `start_llama_server.ps1` & `start_llama_server.sh` — Idempotent `llama-server` startup/status/stop scripts for PowerShell and Git Bash (`--ctx-size 2048 -b 2048 -ub 2048 -np 1`, shared `.local/llama-server.pid`).
   - `install_hooks.ps1` — Safe JSON merger for `%USERPROFILE%\.gemini\config\hooks.json`.
 - `config/` — Tracked portable templates (`hooks.example.json`, `policies.example.json`).
 - `tests/` — Stdlib `unittest` suite covering parser, all 86 `bench/cases.json` cases, mocked Layer 3/fallbacks, and hook CLI/audit contract.
