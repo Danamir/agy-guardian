@@ -169,6 +169,29 @@ def compute_metrics(
     }
 
 
+def filter_existing_models(
+    models: list[dict[str, Any]],
+    skip_server: bool = False,
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], Path]]]:
+    """Partition manifest entries into existing model files and missing ones.
+
+    When ``skip_server`` is True, local file existence is not required because
+    the runner queries an already-running server.
+    """
+    if skip_server:
+        return list(models), []
+
+    existing: list[dict[str, Any]] = []
+    missing: list[tuple[dict[str, Any], Path]] = []
+    for entry in models:
+        model_path = expand_path(entry["path"])
+        if model_path.is_file():
+            existing.append(entry)
+        else:
+            missing.append((entry, model_path))
+    return existing, missing
+
+
 def run_model(
     entry: dict[str, Any],
     cases: list[dict[str, Any]],
@@ -485,6 +508,19 @@ def main() -> int:
     ]
     if not models:
         print(f"No models matched filter {args.model!r} in {manifest_path}", file=sys.stderr)
+        return 1
+
+    models, missing_models = filter_existing_models(models, skip_server=args.skip_server)
+    for entry, missing_path in missing_models:
+        print(
+            f"[WARN] Skipping missing model '{entry['name']}': {missing_path}",
+            file=sys.stderr,
+        )
+    if not models:
+        print(
+            f"ERROR: None of the matched models exist on disk (checked {len(missing_models)} from {manifest_path}).",
+            file=sys.stderr,
+        )
         return 1
 
     results: list[dict[str, Any]] = []
