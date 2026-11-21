@@ -1,0 +1,16 @@
+{
+  "agy-guardian": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"%USERPROFILE%\\workspace\\agy-guardian\\scripts\\agy_guardian_hook.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
