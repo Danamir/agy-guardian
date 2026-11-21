@@ -14,8 +14,11 @@ Local, low-latency 3-layer `PreToolUse` command approval guardian for Google Ant
 
 ## Prerequisites
 
-- Python 3.12+ (pure standard library — zero third-party runtime dependencies)
-- `llama-server` built with native Decision Model (`/v1/systemone`) support (`llama.cpp` Oct 2026+ / PR #29818)
+- **Python 3.12+** (pure standard library — zero third-party runtime dependencies)
+- **Layer 3 backend (pick one, or run deterministic Layer 1 + Layer 2 only):**
+  - **Local `llama-server` (default):** Requires `llama-server` built with native Decision Model (`POST /v1/systemone`) support (`llama.cpp` Oct 2026+ / PR #29818) and a GGUF Decision Model such as `Cloudflare_clef-flash-Q5_K_M.gguf` (`~6.8 GB` VRAM, or `Q4_K_M` at `~6.0 GB` VRAM; available on Hugging Face).
+  - **Remote `gemini-decision-1` (no local GPU or `llama-server` needed):** Requires a Google Gemini API key (`AGY_GUARDIAN_GEMINI_PAID_API_KEY` or explicit opt-in `AGY_GUARDIAN_GEMINI_FREE_API_KEY`).
+  - **Deterministic Layer 1 + Layer 2 only (no GPU or API key needed):** Set `AGY_GUARDIAN_ENABLE_LAYER3=false` (or leave `llama-server` stopped — all non-L1/L2 commands fail closed to `"ask"`).
 
 ## Quick Start
 
@@ -96,3 +99,8 @@ python bench/run_bench.py --model clef-flash --schema both
 ```
 
 Audit logs default to `%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl` with automatic size-based rotation (`5 MiB` per file, `3` backups `.1`–`.3`, configurable via `AGY_GUARDIAN_AUDIT_LOG` / `AGY_GUARDIAN_AUDIT_MAX_BYTES` / `AGY_GUARDIAN_AUDIT_BACKUPS`, or `AGY_GUARDIAN_AUDIT_LOG=off` to disable). Raw benchmark outputs live under `.local/benchmark_results/` (gitignored).
+
+## Security & License
+
+- **Security:** See [`SECURITY.md`](SECURITY.md) for the threat model, security boundaries, and how to report parser bypasses or vulnerabilities.
+- **License:** Licensed under the [Apache License 2.0](LICENSE).
