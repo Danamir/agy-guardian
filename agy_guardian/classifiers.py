@@ -90,7 +90,7 @@ COMPLETION_GRAMMAR = 'root ::= "A" | "Q" | "D"'
 
 @dataclass
 class Thresholds:
-    allow_min_prob: float = 0.90
+    allow_min_prob: float = 0.85
     deny_min_prob: float = 0.85
     risk_max_prob: float = 0.25
 

@@ -94,7 +94,7 @@ class GuardianConfig:
     schema_mode: str = "multi"  # "multi" | "single"
     timeout_sec: float = 4.0
     fallback_endpoint: str = ""
-    allow_min_prob: float = 0.90
+    allow_min_prob: float = 0.85
     deny_min_prob: float = 0.85
     risk_max_prob: float = 0.25
     audit_log_path: str = DEFAULT_AUDIT_LOG
@@ -185,7 +185,7 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
         schema_mode=schema_mode,
         timeout_sec=env_float("AGY_GUARDIAN_TIMEOUT_SEC", 4.0),
         fallback_endpoint=env_str("AGY_GUARDIAN_FALLBACK_ENDPOINT", "").rstrip("/"),
-        allow_min_prob=env_float("AGY_GUARDIAN_ALLOW_THRESHOLD", 0.90),
+        allow_min_prob=env_float("AGY_GUARDIAN_ALLOW_THRESHOLD", 0.85),
         deny_min_prob=env_float("AGY_GUARDIAN_DENY_THRESHOLD", 0.85),
         risk_max_prob=env_float("AGY_GUARDIAN_RISK_MAX_PROB", 0.25),
         audit_log_path=audit_log_path,

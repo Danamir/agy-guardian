@@ -64,6 +64,23 @@ To grant project-scoped access to companion repos, WSL UNC directories (`\\wsl.l
    - `policyNotes`: passed as structured `projectPolicy` context to Layer 3 (`Clef-Flash`).
 3. **Security boundary:** Layer 1 hard-deny is never overridable, and `agy_guardian` refuses to load any policy file stored inside `workspacePaths`.
 
+## Layer 3 Threshold Tuning
+
+Layer 3 only auto-approves a command when **`P(allow) >= AGY_GUARDIAN_ALLOW_THRESHOLD`** **and** all three parallel `multi`-schema risk checks (`destructive`, `outside_workspace`, `injection_or_obfuscation`) stay **`<= AGY_GUARDIAN_RISK_MAX_PROB`**. Anything else fails closed to `"ask"` (or `"deny"` when `P(deny)` or `injection_or_obfuscation >= AGY_GUARDIAN_DENY_THRESHOLD`).
+
+### `AGY_GUARDIAN_ALLOW_THRESHOLD` Ranges (with `multi` schema, default `0.85`)
+
+| Range | Profile | What to Expect & Trade-Offs |
+| :--- | :--- | :--- |
+| **`0.95+`** | **Paranoid** | High prompt friction — most legitimate dev commands (`pytest`, builds, `git commit`) will still ask (~23% safe recall on `bench/cases.json`). Use only if you want Layer 3 to almost never auto-approve. |
+| **`0.90`** | **Strict** | Very conservative. Safe commands with terse user prompts (e.g., replying `"Yes"` before a chained `git add; git commit`) can miss by `0.01–0.04` and prompt unnecessarily. |
+| **`0.85`** | **Balanced (Default)** | Sweet spot for `Clef-Flash Q5_K_M` (`multi` schema): eliminates `0.85–0.89` near-misses on routine dev/git commands while keeping **0% false-allows** and **100% safe recall** across all 86 `bench/cases.json` cases. |
+| **`0.75 – 0.84`** | **Relaxed** | Still `0%` false-allows on `bench/cases.json` in `multi` mode (protected by the `noul` risk checks), **but** shrinks the safety margin on novel/ambiguous commands. **Do not use below `0.85` with `single` schema** (`clef-flash__single` starts false-allowing at `0.80`). |
+| **`< 0.70`** | **Unsafe (Not Recommended)** | High risk of auto-approving ambiguous, destructive, or sensitive commands (e.g., discarding uncommitted changes, staging `.env`, or subtle prompt-injection piggybacks) whenever a risk check scores under `risk_max_prob`. |
+
+- **`AGY_GUARDIAN_RISK_MAX_PROB` (default `0.25`):** Upper bound on each `noul` risk check (`destructive`, `outside_workspace`, `injection_or_obfuscation`). Raising this weakens the parallel safety net that catches piggybacked attacks and out-of-workspace writes; lowering it (e.g., `0.15`) makes Layer 3 more cautious on unfamiliar commands.
+- **`AGY_GUARDIAN_DENY_THRESHOLD` (default `0.85`):** Minimum `P(deny)` or `injection_or_obfuscation` probability to hard-deny instead of prompting `"ask"`. Lowering it increases hard-denies on suspicious commands (potentially causing occasional false-denies instead of `ask`).
+
 ## Testing & Benchmarking
 
 ```powershell
