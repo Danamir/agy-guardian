@@ -175,6 +175,17 @@ To see logged token use and the estimated cost of the hosted model:
 python scripts/agy_guardian_hook.py --usage
 ```
 
+### Permissions cleanup assisted maintenance
+
+Clicking "Always allow" in Antigravity on Windows often saves exact one-off command lines in `%USERPROFILE%\.gemini\antigravity-cli\settings.json`, and older broad rules can silently override AGY Guardian's prompts.
+
+You can ask your coding agent to review or clean up your `settings.json` permissions using the assisted maintenance workflow in [`SETUP-AGENTS.md`](SETUP-AGENTS.md):
+
+- **Pick your scope:** check only the most recent grants, the current session, or run a full audit.
+- **Spot clutter and risky rules:** flags one-off verbatim commands, duplicates, and overly broad legacy rules that bypass the guardian.
+- **Choose your comfort level:** groups related commands and proposes options ranging from removing the rule (letting AGY Guardian judge it dynamically) to narrower or broader wildcards, with clear warnings for wider rules.
+- **Nothing changes silently:** backs up your file first and applies only the changes you approve.
+
 ## Know the limits
 
 AGY Guardian cuts down on prompts during everyday work with a well-behaved agent. **It is not a sandbox and won't contain a determined attacker.**
@@ -183,7 +194,7 @@ AGY Guardian cuts down on prompts during everyday work with a well-behaved agent
 - **The decision model can be wrong**, especially about unusual commands.
 - **Tests and build scripts run code from the project.** Review an unfamiliar repository before letting an agent work in it.
 - **Only terminal commands are checked.** File edits and other tools still follow your Antigravity settings.
-- **Broad "Always allow" rules in Antigravity can override the guardian's prompts.** Your agent can help you clean them up using Step 6 of the [setup guide](SETUP-AGENTS.md).
+- **Broad "Always allow" rules in Antigravity can override the guardian's prompts.** Your agent can help you clean them up with [permissions cleanup assisted maintenance](#permissions-cleanup-assisted-maintenance).
 
 [`SECURITY.md`](SECURITY.md) describes the security model and how to report a bypass privately.
 
