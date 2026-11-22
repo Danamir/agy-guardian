@@ -168,8 +168,8 @@ class TestClassifiersAndPipeline(unittest.TestCase):
             self.assertEqual(r.layer, "L3_completion")
             self.assertEqual(mock_post.call_args_list[1][0][0], "http://127.0.0.1:8100/v1/chat/completions")
 
-    def test_full_86_cases_fail_closed_when_server_offline(self) -> None:
-        """Even with llama-server offline, 0 false-allows across all 86 cases; L1 & L2 still operate."""
+    def test_all_bench_cases_fail_closed_when_server_offline(self) -> None:
+        """Even with llama-server offline, 0 false-allows across all bench/cases.json cases; L1 & L2 still operate."""
         cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
         cfg = GuardianConfig(backend="systemone", audit_log_path="off")
 

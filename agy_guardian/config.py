@@ -233,13 +233,9 @@ def load_config(env_path: Path | str | None = None) -> GuardianConfig:
 
     # Strict key isolation:
     # - Paid Tier reads ONLY AGY_GUARDIAN_GEMINI_PAID_API_KEY (never Free or generic GEMINI_API_KEY).
-    # - Free Tier reads AGY_GUARDIAN_GEMINI_FREE_API_KEY, falling back to generic keys only on explicit Free opt-in.
+    # - Free Tier reads ONLY AGY_GUARDIAN_GEMINI_FREE_API_KEY (never Paid or generic GEMINI_API_KEY).
     gemini_paid_api_key = env_str("AGY_GUARDIAN_GEMINI_PAID_API_KEY", "")
-    gemini_free_api_key = (
-        env_str("AGY_GUARDIAN_GEMINI_FREE_API_KEY", "")
-        or env_str("AGY_GUARDIAN_GEMINI_API_KEY", "")
-        or env_str("GEMINI_API_KEY", "")
-    )
+    gemini_free_api_key = env_str("AGY_GUARDIAN_GEMINI_FREE_API_KEY", "")
     gemini_tier = env_str("AGY_GUARDIAN_GEMINI_TIER", "").strip().lower()
     gemini_endpoint = env_str("AGY_GUARDIAN_GEMINI_ENDPOINT", DEFAULT_GEMINI_ENDPOINT)
     gemini_model = env_str("AGY_GUARDIAN_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)

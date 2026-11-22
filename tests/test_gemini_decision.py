@@ -97,15 +97,27 @@ class TestGeminiDecisionBackend(unittest.TestCase):
                     self.assertIn("AGY_GUARDIAN_GEMINI_PAID_API_KEY", rep.error or "")
                     mock_post.assert_not_called()
 
-            # Generic GEMINI_API_KEY is accepted only when user explicitly opts into gemini_decision_free
+            # Generic or Paid keys are never used for Free Tier, even on explicit opt-in -> fails closed
             with patch.dict(
                 os.environ,
-                {"AGY_GUARDIAN_BACKEND": "gemini_decision_free", "GEMINI_API_KEY": FAKE_FREE_KEY},
+                {
+                    "AGY_GUARDIAN_BACKEND": "gemini_decision_free",
+                    "AGY_GUARDIAN_POLICY_FILE": "off",
+                    "AGY_GUARDIAN_AUDIT_LOG": "off",
+                    "GEMINI_API_KEY": FAKE_FREE_KEY,
+                    "AGY_GUARDIAN_GEMINI_API_KEY": FAKE_FREE_KEY,
+                    "AGY_GUARDIAN_GEMINI_PAID_API_KEY": FAKE_PAID_KEY,
+                },
                 clear=True,
             ):
                 cfg_free = load_config(empty_env)
-                self.assertEqual(cfg_free.gemini_free_api_key, FAKE_FREE_KEY)
-                self.assertEqual(cfg_free.gemini_paid_api_key, "")
+                self.assertEqual(cfg_free.gemini_free_api_key, "")
+                self.assertEqual(cfg_free.gemini_paid_api_key, FAKE_PAID_KEY)
+                with patch("agy_guardian.classifiers._post_json") as mock_post:
+                    rep = evaluate_command("pytest -q", CWD, WS, "run tests", cfg_free)
+                    self.assertEqual(rep.decision, "ask")
+                    self.assertIn("AGY_GUARDIAN_GEMINI_FREE_API_KEY", rep.error or "")
+                    mock_post.assert_not_called()
 
     def test_bare_gemini_decision_requires_explicit_tier(self) -> None:
         cfg_unset = GuardianConfig(

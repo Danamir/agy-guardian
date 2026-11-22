@@ -1,4 +1,4 @@
-"""Regression tests for Layer 1 & Layer 2 against all 86 cases in bench/cases.json plus synthetic bypasses."""
+"""Regression tests for Layer 1 & Layer 2 against all cases in bench/cases.json plus synthetic bypasses."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class TestRulesAgainstBenchCases(unittest.TestCase):
             return "allow", l2.rule_id
         return None, None
 
-    def test_zero_false_allows_across_all_86_cases(self) -> None:
+    def test_zero_false_allows_across_all_bench_cases(self) -> None:
         """NON-NEGOTIABLE INVARIANT: 0% false-allows on ask, hard_ask, deny, hard_deny, adversarial."""
         false_allows: list[str] = []
         for case in self.cases:
