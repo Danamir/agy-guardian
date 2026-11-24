@@ -142,6 +142,8 @@ Some projects span several repositories, WSL folders or remote servers. A policy
 | `extraWorkspaces` | Adds companion folders, including WSL paths |
 | `allowedWritePaths` | Adds folders where the agent may write |
 | `allowedSshReadHosts` | Approves read-only inspection commands over SSH on these servers |
+| `allowedUrls` | Authorizes local or project service URLs (such as a local API) for the decision model |
+| `allowedPrograms` | Authorizes specific external executables or path patterns for the decision model |
 | `policyNotes` | Gives the decision model short guidance in plain English |
 
 Copy [`config/policies.example.json`](config/policies.example.json) to `%USERPROFILE%\.gemini\config\agy_guardian_policies.json` and adapt it. Keep the file there, because AGY Guardian refuses policies stored inside a workspace, where an agent could edit its own permissions.

@@ -4,6 +4,8 @@
     "allowedWritePaths": [],
     "allowedSshReadHosts": [],
     "allowedForgeCliWrites": [],
+    "allowedUrls": [],
+    "allowedPrograms": [],
     "policyNotes": ""
   },
   "projects": [
@@ -23,6 +25,12 @@
       "allowedSshReadHosts": [
         "staging-01",
         "prod-ro.internal"
+      ],
+      "allowedUrls": [
+        "http://127.0.0.1:8188"
+      ],
+      "allowedPrograms": [
+        "C:\\Program Files\\Blender Foundation\\*\\blender.exe"
       ],
       "policyNotes": "Read-only ssh inspection on staging-01 and prod-ro.internal is allowed; remote writes, service restarts, and deployment playbooks still require ask."
     }

@@ -98,7 +98,10 @@ Start from [`config/policies.example.json`](config/policies.example.json) and in
 2. **Companion repositories / WSL directories** (`extraWorkspaces`): Are there sibling repos or WSL UNC paths (`\\wsl.localhost\<Distro>\...` or `\\wsl$\<Distro>\...`) the agent should be able to inspect while working in this project?
 3. **Additional writable directories** (`allowedWritePaths`): Which of those extra folders (if any) should allow non-destructive shell writes/builds?
 4. **Read-only SSH hosts** (`allowedSshReadHosts`): Are there specific server hostnames/aliases where read-only `ssh` diagnostics should be auto-allowed?
-5. **Project-specific Layer 3 guidance** (`policyNotes`): Any short plain-English notes for `Clef-Flash` (e.g., *"Local pytest and read-only ssh on staging-01 are allowed; ansible-playbook runs and service restarts must still ask"*)?
+5. **Local service URLs & external programs** (`allowedUrls`, `allowedPrograms`): Does the project call local/LAN HTTP services (e.g. `http://127.0.0.1:8188`) or external desktop/toolchain binaries outside the workspace (e.g. `C:\Program Files\Blender Foundation\*\blender.exe`)? *(Layer 3 guidance only — never bypasses Layer 1 hard-deny.)*
+6. **Project-specific Layer 3 guidance** (`policyNotes`): Any short plain-English notes for the decision model (e.g., *"Local pytest and read-only ssh on staging-01 are allowed; ansible-playbook runs and service restarts must still ask"*)?
+
+> **Tip:** You can also install the global skill template [`skills/guardian-permissions/SKILL.md`](skills/guardian-permissions/SKILL.md) into `%USERPROFILE%\.gemini\config\skills\guardian-permissions\SKILL.md` (replacing `<AGY_GUARDIAN_REPO>` with this repo path) so you can say *"generalize the last permission"* or *"update guardian policy"* from any project using `scripts/manage_permissions.py` and `scripts/manage_policy.py`.
 
 ### Validate Every Configured Project Policy
 After writing/merging `%USERPROFILE%\.gemini\config\agy_guardian_policies.json`, test **both** an expected allow and an expected ask/deny for each project:

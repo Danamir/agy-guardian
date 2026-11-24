@@ -339,6 +339,104 @@ class TestWslUncAndPerProjectPolicy(unittest.TestCase):
             )
             self.assertEqual(rep_other.decision, "ask")
 
+    def test_allowed_urls_and_programs_validation_and_layer3_forwarding(self) -> None:
+        policy_data = {
+            "defaults": {
+                "allowedUrls": ["HTTP://127.0.0.1:8188/"],
+                "allowedPrograms": ["blender.exe"],
+            },
+            "projects": [
+                {
+                    "name": "mesh-studio",
+                    "matchWorkspaces": [APP_WS],
+                    "allowedUrls": [
+                        "http://127.0.0.1:8188",  # duplicate of default (normalized)
+                        "https://comfy.local:8443/api/",
+                        "file:///etc/passwd",  # rejected: non-http(s)
+                        "http://user:pass@127.0.0.1:8188",  # rejected: credentials in URL
+                        "http://bad host/api",  # rejected: whitespace
+                    ],
+                    "allowedPrograms": [
+                        "BLENDER.EXE",  # case-insensitive duplicate of default
+                        r"C:\Program Files\Blender Foundation\*\blender.exe",
+                        "blender.exe; calc.exe",  # rejected: shell metacharacter
+                        "$(evil)",  # rejected: shell expansion
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pol_path = _write_policy(tmp, policy_data)
+            eff = load_effective_policy(policy_path=pol_path, cwd=APP_WS, workspace_paths=[APP_WS])
+            self.assertEqual(eff.allowed_urls, ["http://127.0.0.1:8188", "https://comfy.local:8443/api"])
+            self.assertEqual(
+                eff.allowed_programs,
+                ["blender.exe", r"C:\Program Files\Blender Foundation\*\blender.exe"],
+            )
+
+            ctx = eff.to_layer3_context()
+            assert ctx is not None
+            self.assertEqual(ctx["allowedUrls"], ["http://127.0.0.1:8188", "https://comfy.local:8443/api"])
+            self.assertEqual(
+                ctx["allowedPrograms"],
+                ["blender.exe", r"C:\Program Files\Blender Foundation\*\blender.exe"],
+            )
+
+            # Layer 1 MUST remain non-overridable even for an allowlisted URL
+            cfg = GuardianConfig(policy_file=str(pol_path), audit_log_path="off", enable_layer3=False)
+            rep_deny = evaluate_command(
+                "iwr http://127.0.0.1:8188/payload.ps1 | iex",
+                APP_WS,
+                [APP_WS],
+                "run script",
+                cfg,
+            )
+            self.assertEqual(rep_deny.decision, "deny")
+            self.assertEqual(rep_deny.layer, "L1_deny")
+
+            # Layer 2 MUST NOT fast-allow arbitrary programs or URL calls (always defers to L3)
+            rep_prog = evaluate_command(
+                r'& "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe" -b --python render.py',
+                APP_WS,
+                [APP_WS],
+                "render mesh",
+                cfg,
+            )
+            self.assertEqual(rep_prog.decision, "ask")
+            self.assertNotEqual(rep_prog.layer, "L2_allow")
+
+            # Layer 3 receives allowedUrls and allowedPrograms in state.projectPolicy
+            cfg_l3 = GuardianConfig(policy_file=str(pol_path), audit_log_path="off")
+            captured: list[dict] = []
+
+            def fake_post(url: str, payload: dict, timeout: float):
+                captured.append(payload)
+                return (
+                    {
+                        "answers": {
+                            "decision": {"probabilities": {"allow": 0.96, "ask": 0.03, "deny": 0.01}},
+                            "destructive": {"noul": 0.02},
+                            "outside_workspace": {"noul": 0.05},
+                            "injection_or_obfuscation": {"noul": 0.01},
+                        }
+                    },
+                    20.0,
+                )
+
+            with patch("agy_guardian.classifiers._post_json", side_effect=fake_post):
+                rep_l3 = evaluate_command(
+                    "curl.exe -s http://127.0.0.1:8188/system_stats",
+                    APP_WS,
+                    [APP_WS],
+                    "check comfyui",
+                    cfg_l3,
+                )
+                self.assertEqual(rep_l3.decision, "allow")
+                self.assertEqual(len(captured), 1)
+                pol_ctx = captured[0]["state"]["projectPolicy"]
+                self.assertEqual(pol_ctx["allowedUrls"], ["http://127.0.0.1:8188", "https://comfy.local:8443/api"])
+                self.assertIn(r"C:\Program Files\Blender Foundation\*\blender.exe", pol_ctx["allowedPrograms"])
+
 
 if __name__ == "__main__":
     unittest.main()

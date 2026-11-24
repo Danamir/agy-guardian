@@ -106,8 +106,11 @@ Decision Models need native `POST /v1/systemone` support (`llama.cpp` Oct 2026+ 
   - `cli.py` & `__main__.py` — Antigravity `PreToolUse` stdin/stdout entrypoint and diagnostic CLI (`--check`, `--policy`, `--health`, `--usage`).
 - `scripts/` — Operational scripts:
   - `agy_guardian_hook.py` — Direct hook launcher (zero `PYTHONPATH` setup needed under `cmd /c`).
+  - `manage_permissions.py` — Safe CLI helper (`show`, `replace`, `remove`) for generalizing `settings.json` `permissions.allow` entries with `--expected` guards and automatic `.bak` backups.
+  - `manage_policy.py` — Safe CLI helper (`show`, `update`) for inspecting and updating `agy_guardian_policies.json` (`allowedUrls`, `allowedPrograms`, workspaces, SSH hosts, notes) with validation and `.bak` backups.
   - `start_llama_server.ps1` & `start_llama_server.sh` — Idempotent `llama-server` startup/status/stop scripts for PowerShell and Git Bash (`--ctx-size 2048 -b 2048 -ub 2048 -np 1`, shared `.local/llama-server.pid`).
   - `install_hooks.ps1` — Safe JSON merger for `%USERPROFILE%\.gemini\config\hooks.json` (`-Disabled`, `-Uninstall`).
+- `skills/` — Tracked reusable Antigravity skill templates (e.g. `guardian-permissions/SKILL.md`).
 - `config/` — Tracked portable templates (`hooks.example.json`, `policies.example.json`).
 - `tests/` — Stdlib `unittest` suite covering parser, every `bench/cases.json` case, mocked Layer 3/fallbacks, the Gemini backend, project policies, and hook CLI/audit contract.
 - `bench/` — Benchmark suite (`cases.json`, `run_bench.py`, `RESULTS.md`, `results/`, and compatibility shims `env.py`/`classifiers.py`).
