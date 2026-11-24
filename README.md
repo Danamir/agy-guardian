@@ -177,6 +177,16 @@ To see logged token use and the estimated cost of the hosted model:
 python scripts/agy_guardian_hook.py --usage
 ```
 
+### Manage permissions and policies from any project
+
+The repository includes a reusable Antigravity skill, [`guardian-permissions`](skills/guardian-permissions/SKILL.md), that you can install globally (the guided setup in [`SETUP-AGENTS.md`](SETUP-AGENTS.md) offers to do this for you). Once installed, you can manage permissions and project policies from **any** workspace in plain English — or invoke it directly with `/guardian-permissions`:
+
+- **"Generalize the last permission"** — inspects the rule Antigravity just saved when you clicked "Always allow", proposes choices ranging from removing it (or moving it into a project policy) to narrower or broader wildcards, and applies the option you pick.
+- **"Show me the guardian policy"** — displays the active AGY Guardian policy for the current project.
+- **"Allow a local URL, program, folder, or note in this project's guardian policy"** — updates your project policy with validation and takes effect on the very next command, without restarting `agy`.
+
+Every change creates a `.bak` backup first and prompts you once to approve the exact update, keeping `~/.gemini/` protected from silent edits.
+
 ### Permissions cleanup assisted maintenance
 
 Clicking "Always allow" in Antigravity on Windows often saves exact one-off command lines in `%USERPROFILE%\.gemini\antigravity-cli\settings.json`, and older broad rules can silently override AGY Guardian's prompts.
