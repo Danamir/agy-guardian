@@ -19,6 +19,7 @@ class EffectivePolicy:
     extra_workspaces: list[str] = field(default_factory=list)
     allowed_write_paths: list[str] = field(default_factory=list)
     allowed_ssh_read_hosts: list[str] = field(default_factory=list)
+    allowed_forge_cli_writes: list[str] = field(default_factory=list)
     policy_notes: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -28,6 +29,7 @@ class EffectivePolicy:
             self.extra_workspaces
             or self.allowed_write_paths
             or self.allowed_ssh_read_hosts
+            or self.allowed_forge_cli_writes
             or self.policy_notes
         )
 
@@ -49,6 +51,8 @@ class EffectivePolicy:
             ctx["allowedWritePaths"] = list(self.allowed_write_paths)
         if self.allowed_ssh_read_hosts:
             ctx["allowedSshReadHosts"] = list(self.allowed_ssh_read_hosts)
+        if self.allowed_forge_cli_writes:
+            ctx["allowedForgeCliWrites"] = list(self.allowed_forge_cli_writes)
         if self.policy_notes:
             ctx["notes"] = " ".join(self.policy_notes)
         return ctx
@@ -89,6 +93,20 @@ def _dedupe_hosts(hosts: list[str]) -> list[str]:
     return out
 
 
+_VALID_FORGE_CLIS = frozenset({"glab", "gh"})
+
+
+def _dedupe_forge_clis(clis: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in clis:
+        cleaned = str(c).strip().lower()
+        if cleaned in _VALID_FORGE_CLIS and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned)
+    return out
+
+
 def _str_list(obj: Any) -> list[str]:
     if not isinstance(obj, list):
         return []
@@ -114,12 +132,14 @@ def _merge_section(
     target_extra: list[str],
     target_writes: list[str],
     target_hosts: list[str],
+    target_forge_writes: list[str],
     target_notes: list[str],
     section: dict[str, Any],
 ) -> None:
     target_extra.extend(_str_list(section.get("extraWorkspaces")))
     target_writes.extend(_str_list(section.get("allowedWritePaths")))
     target_hosts.extend(_str_list(section.get("allowedSshReadHosts")))
+    target_forge_writes.extend(_str_list(section.get("allowedForgeCliWrites")))
     note = section.get("policyNotes")
     if isinstance(note, str) and note.strip():
         target_notes.append(note.strip())
@@ -136,6 +156,7 @@ def load_effective_policy(
     extra_ws: list[str] = list(env_extra_workspaces or [])
     allowed_writes: list[str] = []
     ssh_hosts: list[str] = []
+    forge_writes: list[str] = []
     notes: list[str] = []
     matched: list[str] = []
 
@@ -166,7 +187,7 @@ def load_effective_policy(
 
     defaults = data.get("defaults")
     if isinstance(defaults, dict):
-        _merge_section(extra_ws, allowed_writes, ssh_hosts, notes, defaults)
+        _merge_section(extra_ws, allowed_writes, ssh_hosts, forge_writes, notes, defaults)
 
     active_paths = list(workspace_paths) if workspace_paths else ([cwd] if cwd else [])
     projects = data.get("projects")
@@ -180,12 +201,13 @@ def load_effective_policy(
             if _workspace_matches_any(active_paths, match_roots):
                 proj_name = str(entry.get("name") or f"project_{idx}").strip()
                 matched.append(proj_name)
-                _merge_section(extra_ws, allowed_writes, ssh_hosts, notes, entry)
+                _merge_section(extra_ws, allowed_writes, ssh_hosts, forge_writes, notes, entry)
 
     return EffectivePolicy(
         matched_projects=matched,
         extra_workspaces=_dedupe_paths(extra_ws),
         allowed_write_paths=_dedupe_paths(allowed_writes),
         allowed_ssh_read_hosts=_dedupe_hosts(ssh_hosts),
+        allowed_forge_cli_writes=_dedupe_forge_clis(forge_writes),
         policy_notes=notes,
     )

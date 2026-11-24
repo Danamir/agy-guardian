@@ -259,6 +259,86 @@ class TestWslUncAndPerProjectPolicy(unittest.TestCase):
                 evaluate_command("pytest -q", OTHER_WS, [OTHER_WS], "run tests", cfg)
                 self.assertNotIn("projectPolicy", captured_payloads[1]["state"])
 
+    def test_forge_cli_writes_policy_opt_in_and_safety_guards(self) -> None:
+        policy_data = {
+            "projects": [
+                {
+                    "name": "my-app",
+                    "matchWorkspaces": [APP_WS],
+                    "allowedForgeCliWrites": ["glab", "gh", "unknown-cli"],
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            pol_path = _write_policy(tmp, policy_data)
+            cfg = GuardianConfig(policy_file=str(pol_path), audit_log_path="off", enable_layer3=False)
+
+            allowed_writes = [
+                'glab issue create -t "Fix bug" -d "Details"',
+                'glab issue update 1424 --label bug',
+                'glab issue note 1424 -m "Investigating"',
+                'glab issue close 1424',
+                'glab mr note 42 -m "Looks good"',
+                'glab label create "triage"',
+                'gh issue create -t "Fix bug" -b "Details"',
+                'gh issue edit 123 --add-label bug',
+                'gh issue comment 123 -b "Investigating"',
+                'gh issue close 123',
+                'gh pr comment 42 -b "Looks good"',
+                'gh label create "triage"',
+            ]
+            for cmd in allowed_writes:
+                with self.subTest(allowed=cmd):
+                    rep = evaluate_command(cmd, APP_WS, [APP_WS], "update issue", cfg)
+                    self.assertEqual(rep.decision, "allow", f"Expected L2 forge write allow for: {cmd} (got {rep})")
+                    self.assertEqual(rep.rule_id, "L2_FAST_ALLOW_FORGE_WRITE")
+
+            # Still blocked EVEN when allowedForgeCliWrites enables glab & gh
+            still_blocked = [
+                # MR/PR creation, update, merge, close, approve, resolve
+                "glab mr create --fill",
+                "glab mr update 42 --title foo",
+                "glab mr merge 42",
+                "glab mr close 42",
+                "glab mr approve 42",
+                'glab mr note 42 -m "done" --resolve',
+                "gh pr create --fill",
+                "gh pr edit 42 --title foo",
+                "gh pr merge 42",
+                "gh pr close 42",
+                "gh pr review 42 --approve",
+                # Deletes
+                "glab issue delete 1424",
+                "glab label delete triage",
+                "gh issue delete 123",
+                "gh label delete triage",
+                # File-exfiltration flags on writes
+                'gh issue create -t "leak" -F .env',
+                'gh pr comment 42 --body-file .env',
+                'glab issue create -t "leak" --description-file .env',
+                # Piped stdin into write
+                'cat README.md | glab issue note 1424',
+                'cat README.md | gh pr comment 42',
+                # Auth / secrets / non-GET api
+                "gh auth token",
+                "glab auth token",
+                "glab api -X POST projects/123/issues -f title=hi",
+            ]
+            for cmd in still_blocked:
+                with self.subTest(blocked=cmd):
+                    rep = evaluate_command(cmd, APP_WS, [APP_WS], "forge op", cfg)
+                    self.assertNotEqual(rep.decision, "allow", f"Must NOT allow even with policy: {cmd}")
+
+            # Unrelated workspace must NOT inherit my-app's allowedForgeCliWrites
+            rep_other = evaluate_command(
+                'glab issue create -t "Fix" -d "Details"',
+                OTHER_WS,
+                [OTHER_WS],
+                "create issue",
+                cfg,
+            )
+            self.assertEqual(rep_other.decision, "ask")
+
 
 if __name__ == "__main__":
     unittest.main()

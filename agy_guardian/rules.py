@@ -1319,59 +1319,303 @@ def _check_pipeline_filter(head: str, args: list[Token], is_piped_in: bool) -> b
     return True
 
 
+_GLAB_READONLY_SUBS: dict[str, set[str]] = {
+    "issue": {"view", "list", "ls"},
+    "mr": {"view", "list", "ls", "diff", "issues"},
+    "ci": {"status", "list", "view", "get", "trace", "lint"},
+    "job": {"list", "view", "trace"},
+    "repo": {"view", "list", "ls", "search", "contributors"},
+    "label": {"list", "ls"},
+    "milestone": {"list", "ls", "get"},
+    "release": {"list", "ls", "view"},
+    "snippet": {"list", "ls", "view"},
+    "epic": {"list", "ls", "view"},
+    "iteration": {"list", "ls"},
+    "schedule": {"list", "ls", "view"},
+}
+
+_GLAB_ALLOWED_WRITE_SUBS: dict[str, set[str]] = {
+    "issue": {"create", "new", "update", "note", "comment", "close", "reopen", "subscribe", "unsubscribe"},
+    "mr": {"note", "comment"},
+    "label": {"create"},
+    "milestone": {"create", "edit"},
+}
+
+_GH_READONLY_SUBS: dict[str, set[str]] = {
+    "issue": {"view", "list", "ls", "status"},
+    "pr": {"view", "list", "ls", "diff", "checks", "status"},
+    "run": {"list", "ls", "view", "watch"},
+    "workflow": {"list", "ls", "view"},
+    "repo": {"view", "list", "ls"},
+    "release": {"list", "ls", "view"},
+    "label": {"list", "ls"},
+    "search": {"issues", "prs", "repos", "commits", "code"},
+    "gist": {"list", "ls", "view"},
+    "project": {"list", "ls", "view", "item-list", "field-list"},
+}
+
+_GH_ALLOWED_WRITE_SUBS: dict[str, set[str]] = {
+    "issue": {"create", "edit", "comment", "close", "reopen"},
+    "pr": {"comment"},
+    "label": {"create", "edit"},
+}
+
+_FORGE_READONLY_FORBIDDEN_LONG = {"--web", "--output-file", "--file"}
+_FORGE_WRITE_FORBIDDEN_LONG = {
+    "--body-file",
+    "--description-file",
+    "--file",
+    "--input",
+    "--editor",
+    "--web",
+    "--template",
+    "--recover",
+    "--resolve",
+    "--unresolve",
+}
+_FORGE_API_FORBIDDEN_LONG = {"--field", "--raw-field", "--input", "--data", "--header"}
+
+
+def _check_forge_api_readonly(sub_args: list[Token], is_piped_in: bool) -> bool:
+    """Allow strictly GET-only `glab api` / `gh api` calls with no body/field/file flags."""
+    if is_piped_in or not sub_args:
+        return False
+    value_flags = {"--jq", "-q", "--template", "-t", "--hostname", "--cache", "--preview", "-p"}
+    positionals: list[Token] = []
+    i = 0
+    while i < len(sub_args):
+        tok = sub_args[i]
+        raw = tok.text
+        low = tok.normalized
+        base = low.split("=", 1)[0]
+
+        if raw == "--":
+            positionals.extend(sub_args[i + 1 :])
+            break
+
+        if base in _FORGE_API_FORBIDDEN_LONG:
+            return False
+
+        if base == "--method":
+            if "=" in raw:
+                method = raw.split("=", 1)[1].strip().upper()
+                i += 1
+            else:
+                if i + 1 >= len(sub_args):
+                    return False
+                method = sub_args[i + 1].text.strip().upper()
+                i += 2
+            if method != "GET":
+                return False
+            continue
+
+        if raw == "-X":
+            if i + 1 >= len(sub_args):
+                return False
+            if sub_args[i + 1].text.strip().upper() != "GET":
+                return False
+            i += 2
+            continue
+
+        if raw.startswith("-X") and len(raw) > 2:
+            if raw[2:].strip().upper() != "GET":
+                return False
+            i += 1
+            continue
+
+        if raw.startswith("-") and not raw.startswith("--") and len(raw) > 1:
+            cluster = raw[1:]
+            # -f/-F switch api to POST and support @file; -d/-H/-X mutate or send custom headers/methods
+            if any(ch in cluster for ch in ("f", "F", "d", "H", "X")):
+                return False
+            if raw in value_flags:
+                if i + 1 >= len(sub_args):
+                    return False
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if raw.startswith("--"):
+            if base in value_flags and "=" not in raw:
+                if i + 1 >= len(sub_args):
+                    return False
+                i += 2
+                continue
+            i += 1
+            continue
+
+        positionals.append(tok)
+        i += 1
+
+    if len(positionals) != 1:
+        return False
+    endpoint = positionals[0].text.strip().lstrip("/").lower()
+    if not endpoint or endpoint == "graphql" or endpoint.startswith("graphql/"):
+        return False
+    return True
+
+
+def _check_forge_cli(
+    head: str,
+    args: list[Token],
+    is_piped_in: bool,
+    allowed_forge_cli_writes: set[str],
+) -> str | None:
+    """Validate read-only (built-in) and policy-opted-in non-MR write `glab`/`gh` commands.
+
+    Returns 'readonly', 'write', or None (defer to Layer 3).
+    """
+    if not args:
+        return None
+
+    idx = 0
+    # Parse leading global flags before subcommand
+    while idx < len(args) and args[idx].text.startswith("-"):
+        raw = args[idx].text
+        low = args[idx].normalized
+        base = low.split("=", 1)[0]
+        if len(args) == 1 and low in ("--version", "--help", "-h"):
+            return "readonly"
+        if head == "glab" and len(args) == 1 and raw == "-v":
+            return "readonly"
+        if head == "glab" and base in ("-r", "--repo"):
+            if "=" in raw:
+                idx += 1
+            else:
+                if idx + 1 >= len(args):
+                    return None
+                idx += 2
+            continue
+        if head == "glab" and low == "--no-color":
+            idx += 1
+            continue
+        return None
+
+    if idx >= len(args):
+        return None
+
+    group = args[idx].normalized
+    rest = args[idx + 1 :]
+
+    if group == "version" and not rest:
+        return "readonly"
+    if head == "gh" and group == "status":
+        for tok in rest:
+            if tok.normalized.split("=", 1)[0] in _FORGE_READONLY_FORBIDDEN_LONG or tok.text == "-w":
+                return None
+        return "readonly"
+
+    if group == "api":
+        return "readonly" if _check_forge_api_readonly(rest, is_piped_in) else None
+
+    if not rest:
+        return None
+
+    # Allow `glab issue board view ...`
+    if head == "glab" and group == "issue" and rest[0].normalized == "board":
+        if len(rest) >= 2 and rest[1].normalized == "view":
+            sub_args = rest[2:]
+            for tok in sub_args:
+                base = tok.normalized.split("=", 1)[0]
+                if base in _FORGE_READONLY_FORBIDDEN_LONG or tok.text == "-w":
+                    return None
+            return "readonly"
+        return None
+
+    action = rest[0].normalized
+    sub_args = rest[1:]
+
+    readonly_map = _GLAB_READONLY_SUBS if head == "glab" else _GH_READONLY_SUBS
+    if action in readonly_map.get(group, ()):
+        for tok in sub_args:
+            raw = tok.text
+            base = tok.normalized.split("=", 1)[0]
+            if base in _FORGE_READONLY_FORBIDDEN_LONG:
+                return None
+            if raw == "-w" or (head == "glab" and group == "ci" and action == "lint" and raw == "-f"):
+                return None
+        return "readonly"
+
+    if head in allowed_forge_cli_writes and not is_piped_in:
+        write_map = _GLAB_ALLOWED_WRITE_SUBS if head == "glab" else _GH_ALLOWED_WRITE_SUBS
+        if action in write_map.get(group, ()):
+            for tok in sub_args:
+                raw = tok.text
+                base = tok.normalized.split("=", 1)[0]
+                if base in _FORGE_WRITE_FORBIDDEN_LONG:
+                    return None
+                if raw.startswith("-") and not raw.startswith("--") and len(raw) > 1:
+                    if any(ch in raw[1:] for ch in ("F", "e", "w")):
+                        return None
+            return "write"
+
+    return None
+
+
 def _check_segment_layer2(
     seg: CommandSegment,
     cwd: str,
     workspace_paths: list[str],
     allowed_ssh_read_hosts: set[str],
-) -> bool:
+    allowed_forge_cli_writes: set[str],
+) -> str | None:
+    """Return a match category ('readonly', 'ssh_readonly', 'forge_readonly', 'forge_write') or None."""
     if seg.opaque_reasons or not seg.tokens:
-        return False
+        return None
 
     head = seg.head
     args = seg.args
     is_piped_in = seg.operator_before == "|"
 
     if head == "ssh" and allowed_ssh_read_hosts:
-        return _check_ssh_readonly_segment(seg, allowed_ssh_read_hosts)
+        return "ssh_readonly" if _check_ssh_readonly_segment(seg, allowed_ssh_read_hosts) else None
+
+    if head in ("glab", "gh"):
+        forge_kind = _check_forge_cli(head, args, is_piped_in, allowed_forge_cli_writes)
+        if forge_kind == "readonly":
+            return "forge_readonly"
+        if forge_kind == "write":
+            return "forge_write"
+        return None
 
     if head in _ZERO_ARG_INFO_HEADS and not args:
-        return True
+        return "readonly"
 
     if head in _VERSION_ONLY_HEADS:
         if len(args) == 1:
             flag = args[0].text
             if flag == "--version":
-                return True
+                return "readonly"
             if flag == "-V" and head in ("python", "python3", "py", "uv", "ruff", "pytest", "rustc", "cargo"):
-                return True
+                return "readonly"
             if flag == "-v" and head in ("node", "npm", "git"):
-                return True
+                return "readonly"
         if head != "git":
-            return False
+            return None
 
     if head == "git":
-        return _check_git_readonly(args, cwd, workspace_paths)
+        return "readonly" if _check_git_readonly(args, cwd, workspace_paths) else None
 
     if head in ("rg", "grep"):
-        return _check_rg_or_grep(head, args, cwd, workspace_paths)
+        return "readonly" if _check_rg_or_grep(head, args, cwd, workspace_paths) else None
 
     if head == "fd":
-        return _check_fd(args, cwd, workspace_paths)
+        return "readonly" if _check_fd(args, cwd, workspace_paths) else None
 
     if head == "select-string":
-        return _check_select_string(args, cwd, workspace_paths)
+        return "readonly" if _check_select_string(args, cwd, workspace_paths) else None
 
     if head in _DIR_LIST_HEADS:
-        return _check_dir_list(args, cwd, workspace_paths)
+        return "readonly" if _check_dir_list(args, cwd, workspace_paths) else None
 
     if head in _FILE_VIEW_HEADS:
-        return _check_file_view(args, cwd, workspace_paths, is_piped_in)
+        return "readonly" if _check_file_view(args, cwd, workspace_paths, is_piped_in) else None
 
     if head in _PIPELINE_FILTER_HEADS:
-        return _check_pipeline_filter(head, args, is_piped_in)
+        return "readonly" if _check_pipeline_filter(head, args, is_piped_in) else None
 
-    return False
+    return None
 
 
 def check_layer2_allow(
@@ -1379,8 +1623,9 @@ def check_layer2_allow(
     cwd: str,
     workspace_paths: list[str],
     allowed_ssh_read_hosts: set[str] | list[str] | None = None,
+    allowed_forge_cli_writes: set[str] | list[str] | None = None,
 ) -> RuleMatch | None:
-    """Evaluate Layer 2 deterministic fast-allow rules (zero opaque constructs, all segments read-only)."""
+    """Evaluate Layer 2 deterministic fast-allow rules (zero opaque constructs, all segments allowed)."""
     if parsed.has_opaque or not parsed.leaf_segments:
         return None
     if not workspace_paths or not cwd:
@@ -1389,19 +1634,36 @@ def check_layer2_allow(
         return None
 
     ssh_hosts = {h.strip().lower() for h in (allowed_ssh_read_hosts or []) if h and h.strip()}
+    forge_writes = {c.strip().lower() for c in (allowed_forge_cli_writes or []) if c and c.strip()}
 
+    kinds: set[str] = set()
     for seg in parsed.leaf_segments:
-        if not _check_segment_layer2(seg, cwd, workspace_paths, ssh_hosts):
+        kind = _check_segment_layer2(seg, cwd, workspace_paths, ssh_hosts, forge_writes)
+        if kind is None:
             return None
+        kinds.add(kind)
 
     heads = ", ".join(seg.head for seg in parsed.leaf_segments)
-    has_ssh = any(seg.head == "ssh" for seg in parsed.leaf_segments)
+    if "forge_write" in kinds:
+        return RuleMatch(
+            decision="allow",
+            rule_id="L2_FAST_ALLOW_FORGE_WRITE",
+            reason=f"Layer 2 fast-allow: verified policy-allowed forge CLI write ({heads})",
+        )
+    if "ssh_readonly" in kinds:
+        return RuleMatch(
+            decision="allow",
+            rule_id="L2_FAST_ALLOW_SSH_READONLY",
+            reason=f"Layer 2 fast-allow: verified policy-allowed read-only ssh command ({heads})",
+        )
+    if "forge_readonly" in kinds:
+        return RuleMatch(
+            decision="allow",
+            rule_id="L2_FAST_ALLOW_FORGE_READONLY",
+            reason=f"Layer 2 fast-allow: verified read-only forge CLI command ({heads})",
+        )
     return RuleMatch(
         decision="allow",
-        rule_id="L2_FAST_ALLOW_SSH_READONLY" if has_ssh else "L2_FAST_ALLOW_READONLY",
-        reason=(
-            f"Layer 2 fast-allow: verified policy-allowed read-only ssh command ({heads})"
-            if has_ssh
-            else f"Layer 2 fast-allow: verified read-only workspace command ({heads})"
-        ),
+        rule_id="L2_FAST_ALLOW_READONLY",
+        reason=f"Layer 2 fast-allow: verified read-only workspace command ({heads})",
     )

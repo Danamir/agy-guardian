@@ -342,6 +342,7 @@ def evaluate_command(
                 cwd,
                 effective_workspaces,
                 allowed_ssh_read_hosts=effective_policy.allowed_ssh_read_hosts,
+                allowed_forge_cli_writes=effective_policy.allowed_forge_cli_writes,
             )
             if l2 is not None:
                 return DecisionReport(

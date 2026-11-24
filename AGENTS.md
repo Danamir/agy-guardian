@@ -19,7 +19,7 @@ Evaluation order is L1 → L2 → L3; the first conclusive layer wins.
 
 ### Layer 2 — Deterministic Fast-Allow (0 ms)
 
-- **Allows:** trivial, cleanly decomposed read-only commands (`git status/diff/log/show`, `rg`, `fd`, `Get-ChildItem`, `Get-Content` on non-sensitive files, etc.) with all paths inside the effective workspaces, plus policy-scoped read-only SSH.
+- **Allows:** trivial, cleanly decomposed read-only commands (`git status/diff/log/show`, `rg`, `fd`, `Get-ChildItem`, `Get-Content` on non-sensitive files, read-only `glab`/`gh` queries and GET-only `api`, etc.) with all paths inside the effective workspaces, plus policy-scoped read-only SSH (`allowedSshReadHosts`) and policy-scoped non-MR/non-destructive `glab`/`gh` writes (`allowedForgeCliWrites`).
 - **Effective workspaces:** `workspacePaths`, policy `extraWorkspaces` and `allowedWritePaths`, `AGY_GUARDIAN_EXTRA_WORKSPACES`, and the current session's brain directory (unless `AGY_GUARDIAN_ALLOW_SESSION_BRAIN=false`).
 - **Never fast-allows opaque constructs:** `$(...)`, `$vars`, backticks, `-EncodedCommand`, `iex`, redirections, script blocks, or unknown wrappers.
 

@@ -179,6 +179,98 @@ class TestRulesAgainstBenchCases(unittest.TestCase):
         self.assertIsNotNone(check_layer1_deny(p_bad, CWD, WS))
         self.assertIsNone(check_layer2_allow(p_bad, CWD, WS))
 
+    def test_forge_cli_readonly_builtin_layer2(self) -> None:
+        allowed_readonly = [
+            "glab issue view 1424 --comments",
+            "glab issue list --assignee @me -F json",
+            "glab -R group/project issue view 1384 --comments",
+            "glab mr view 42 --comments",
+            "glab mr diff 42",
+            "glab ci status",
+            "glab ci trace 99999",
+            "glab repo view group/project",
+            "glab label list",
+            "glab milestone list",
+            "glab release list",
+            "glab api projects/123/issues/1424",
+            "glab api -X GET projects/123/issues/1424 --paginate",
+            "glab --version",
+            "glab issue view 1424 --comments | Select-Object -First 40",
+            "gh issue view 123 --comments",
+            "gh issue list --state open --json number,title",
+            "gh pr view 45 --comments",
+            "gh pr diff 45",
+            "gh pr checks 45",
+            "gh run list --limit 10",
+            "gh run view 98765 --log-failed",
+            "gh workflow list",
+            "gh repo view owner/repo",
+            "gh search issues --repo owner/repo bug",
+            "gh status",
+            "gh api repos/owner/repo/issues/123 --jq .title",
+            "gh --version",
+        ]
+        for cmd in allowed_readonly:
+            with self.subTest(allowed=cmd):
+                parsed = parse_command(cmd)
+                self.assertIsNone(check_layer1_deny(parsed, CWD, WS))
+                m = check_layer2_allow(parsed, CWD, WS)
+                self.assertIsNotNone(m, f"Expected built-in L2 allow for: {cmd}")
+                self.assertEqual(m.rule_id, "L2_FAST_ALLOW_FORGE_READONLY")
+
+        must_defer_without_policy = [
+            # Writes require policy opt-in
+            'glab issue create -t "Bug" -d "Details"',
+            'glab issue note 1424 -m "Comment"',
+            'glab mr note 42 -m "LGTM"',
+            'gh issue create -t "Bug" -b "Details"',
+            'gh pr comment 42 -b "LGTM"',
+            # Always ask: MR/PR mutations, deletes, auth, secrets, config, CI triggers, non-GET api
+            "glab mr create --fill",
+            "glab mr update 42 --title foo",
+            "glab mr merge 42",
+            "glab mr close 42",
+            "glab mr approve 42",
+            "glab issue delete 1424",
+            "glab auth status",
+            "glab auth token",
+            "glab config get token",
+            "glab variable list",
+            "glab ci run",
+            "glab repo clone group/project",
+            "glab repo delete group/project",
+            "glab api -X POST projects/123/issues",
+            "glab api projects/123/issues -f title=hi",
+            "glab api projects/123/issues -F description=@.env",
+            "glab api graphql -f query=x",
+            "glab issue view 1424 --web",
+            "glab ci lint -f ../.gitlab-ci.yml",
+            "gh pr create --fill",
+            "gh pr edit 42 --title foo",
+            "gh pr merge 42",
+            "gh pr review 42 --approve",
+            "gh issue delete 123",
+            "gh auth token",
+            "gh auth status",
+            "gh secret list",
+            "gh variable list",
+            "gh config list",
+            "gh workflow run deploy.yml",
+            "gh repo clone owner/repo",
+            "gh api -X DELETE repos/owner/repo/issues/1",
+            "gh api repos/owner/repo/issues -f title=hi",
+            "gh api repos/owner/repo/issues -F body=@.env",
+            "gh api graphql",
+            "gh pr view 42 -w",
+        ]
+        for cmd in must_defer_without_policy:
+            with self.subTest(deferred=cmd):
+                parsed = parse_command(cmd)
+                self.assertIsNone(
+                    check_layer2_allow(parsed, CWD, WS),
+                    f"Must NOT built-in fast-allow: {cmd}",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

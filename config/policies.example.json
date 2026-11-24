@@ -3,6 +3,7 @@
     "extraWorkspaces": [],
     "allowedWritePaths": [],
     "allowedSshReadHosts": [],
+    "allowedForgeCliWrites": [],
     "policyNotes": ""
   },
   "projects": [
