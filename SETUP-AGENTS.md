@@ -2,7 +2,7 @@
 
 > **Audience:** Coding agents (`agy` or any AI assistant) asked by a user to install, configure, and verify `agy-guardian` on a Windows 10/11 machine.
 >
-> **Core Rule:** Ask before modifying files outside this repository (`.env`, `%USERPROFILE%\.gemini\config\hooks.json`, `%USERPROFILE%\.gemini\config\agy_guardian_policies.json`), never overwrite existing user configs without merging or confirming, and never commit machine-local files or personal paths to git.
+> **Core Rule:** Ask before modifying files outside this repository (`.env`, `%USERPROFILE%\.gemini\config\hooks.json`, `%USERPROFILE%\.gemini\config\agy_guardian_policies.json`, `%USERPROFILE%\.gemini\config\skills\guardian-permissions\SKILL.md`), never overwrite existing user configs without merging or confirming, and never commit machine-local files or personal paths to git.
 
 ---
 
@@ -150,6 +150,22 @@ Get-Content "$env:USERPROFILE\.gemini\config\hooks.json" -Raw | ConvertFrom-Json
 
 ---
 
+## Step 5b — Optional: Install the Global `guardian-permissions` Skill
+
+Ask the user whether they want to install the global `guardian-permissions` skill so they can say *"generalize the last permission"*, *"show me the guardian policy"*, or *"allow `<url/program>` in this project's guardian policy"* from **any** workspace.
+
+If the user approves:
+1. Read [`skills/guardian-permissions/SKILL.md`](skills/guardian-permissions/SKILL.md).
+2. Replace every `<AGY_GUARDIAN_REPO>` placeholder with the absolute path to this local `agy-guardian` clone (and remove the template installation note line).
+3. Write the rendered file to `%USERPROFILE%\.gemini\config\skills\guardian-permissions\SKILL.md` (creating parent directories if needed; ask before overwriting if it already exists).
+4. Verify the installed skill exists and contains no leftover `<AGY_GUARDIAN_REPO>` placeholder:
+   ```powershell
+   Select-String -Path "$env:USERPROFILE\.gemini\config\skills\guardian-permissions\SKILL.md" -SimpleMatch "<AGY_GUARDIAN_REPO>"
+   ```
+   *(Expected: no matches.)*
+
+---
+
 ## Step 6 — Optional Maintenance: `settings.json` Permissions Cleanup
 
 On Windows PowerShell, clicking "Always allow" in `agy` often persists **exact full command strings** whenever a command contains `$vars`, backticks, pipes, `;`, or complex flags. Over time, `%USERPROFILE%\.gemini\antigravity-cli\settings.json` accumulates noisy, one-off verbatim entries.
@@ -185,5 +201,6 @@ When the user asks to clean up `settings.json` permissions:
 2. Give the user a concise summary of:
    - Configured model & `llama-server` status (`start_llama_server.ps1 -Background` / `-Status` / `-Stop`)
    - Installed `hooks.json` state (enabled / disabled / skipped)
+   - Installed global `guardian-permissions` skill state (installed / skipped)
    - Configured per-project policies and audit log path (`%USERPROFILE%\.gemini\config\agy_guardian.log.jsonl`)
-   - Reminder to restart or open a fresh `agy` session so `hooks.json` changes take effect.
+   - Reminder to restart or open a fresh `agy` session so `hooks.json` and global skill changes take effect.
